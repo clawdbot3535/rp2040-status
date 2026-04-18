@@ -1,0 +1,11 @@
+[Unit]
+Description=RP2040 Status LED Broker
+After=default.target
+
+[Service]
+ExecStart=/usr/bin/python3 -u %h/projects/rp2040-status/broker.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
