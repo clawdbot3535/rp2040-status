@@ -80,16 +80,57 @@ systemctl --user enable --now rp2040-broker
 python3 broker.py
 ```
 
-### 4. Wire up Claude Code hooks
+### 4. Wire up agent hooks
 
-Call `send.py` from your hook configuration so that each session reports its
-state. Example hook payload:
+`send.py` is **source-agnostic**: it accepts a session id and a source label from
+multiple channels, so any tool with shell hooks can drive the LED.
+
+#### Claude Code
+
+Hooks pipe a JSON payload on stdin — `send.py` picks `session_id` from it
+automatically:
 
 ```bash
 echo '{"session_id":"abc"}' | python3 send.py WORKING
 ```
 
-Manual testing:
+#### Codex CLI
+
+Use environment variables in your hook command:
+
+```bash
+RP2040_SOURCE=codex \
+RP2040_SESSION_ID="$CODEX_SESSION_ID" \
+python3 /path/to/send.py WORKING
+```
+
+…or pass flags directly:
+
+```bash
+python3 send.py WORKING --source codex --session "$CODEX_SESSION_ID"
+```
+
+#### Antigravity
+
+Same pattern, with `RP2040_SOURCE=antigravity`:
+
+```bash
+RP2040_SOURCE=antigravity \
+RP2040_SESSION_ID="$AG_SESSION_ID" \
+python3 /path/to/send.py INPUT
+```
+
+#### Resolution order
+
+| field        | priority (high → low)                                                     |
+|--------------|----------------------------------------------------------------------------|
+| `session_id` | `--session` → positional arg → `$RP2040_SESSION_ID` → stdin JSON → `manual` |
+| `source`     | `--source` → `$RP2040_SOURCE` → stdin JSON shape (Claude Code) → `unknown`  |
+
+Each `(source, session_id)` pair gets its own file (`/tmp/rp2040-status/<source>-<id>`),
+so multiple tools running concurrently never collide on a shared `manual` slot.
+
+#### Manual testing
 
 ```bash
 python3 send.py PERMISSION
