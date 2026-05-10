@@ -6,8 +6,10 @@ Usage:
     # Claude Code (Hook liefert JSON via stdin):
     echo '{"session_id":"abc"}' | python3 send.py WORKING
 
-    # Codex / Antigravity (oder beliebige Tools) via Env-Vars:
-    RP2040_SOURCE=codex RP2040_SESSION_ID=$CODEX_SESSION_ID python3 send.py WORKING
+    # Codex CLI (Hook in ~/.codex/hooks.json liefert JSON via stdin):
+    echo '{"session_id":"abc","turn_id":"t1"}' | python3 send.py WORKING --source codex
+
+    # Antigravity oder beliebige Tools via Env-Vars:
     RP2040_SOURCE=antigravity RP2040_SESSION_ID=$AG_SESSION python3 send.py INPUT
 
     # Explizit ueber Flags:
@@ -28,7 +30,7 @@ Aufloesungs-Reihenfolge fuer session_id:
     --session > positional > $RP2040_SESSION_ID > stdin JSON > "manual"
 
 Aufloesungs-Reihenfolge fuer source:
-    --source > $RP2040_SOURCE > stdin-Heuristik (Claude Code) > "unknown"
+    --source > $RP2040_SOURCE > stdin-Heuristik (Codex turn_id, Claude Code) > "unknown"
 """
 
 import argparse
@@ -42,6 +44,7 @@ from typing import Optional
 VALID = {"WORKING", "INPUT", "PERMISSION", "DONE", "OFF"}
 STATUS_DIR = "/tmp/rp2040-status"
 CONFIG_FILE = os.path.join(STATUS_DIR, ".config")
+CODEX_HOOK_KEYS = {"turn_id"}
 CLAUDE_CODE_HOOK_KEYS = {"transcript_path", "hook_event_name"}
 
 
@@ -73,7 +76,9 @@ def resolve_source(explicit: Optional[str], stdin_data: dict) -> str:
     env_src = os.environ.get("RP2040_SOURCE")
     if env_src:
         return env_src
-    # Claude Code hooks senden charakteristische Felder im JSON-Payload.
+    # Codex hooks send turn_id (Codex extension over the Claude Code schema).
+    if any(k in stdin_data for k in CODEX_HOOK_KEYS):
+        return "codex"
     if any(k in stdin_data for k in CLAUDE_CODE_HOOK_KEYS):
         return "claude-code"
     if "session_id" in stdin_data:

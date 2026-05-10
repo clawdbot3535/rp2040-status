@@ -96,19 +96,42 @@ echo '{"session_id":"abc"}' | python3 send.py WORKING
 
 #### Codex CLI
 
-Use environment variables in your hook command:
+Codex has a Claude-Code-style hook system: drop a `hooks.json` into
+`~/.codex/` with the events you want to react to. The `session_id` arrives
+on stdin in the JSON payload (same shape as Claude Code, plus a `turn_id`
+field that lets `send.py` auto-detect the source).
 
-```bash
-RP2040_SOURCE=codex \
-RP2040_SESSION_ID="$CODEX_SESSION_ID" \
-python3 /path/to/send.py WORKING
+```json
+{
+  "UserPromptSubmit": [
+    { "matcher": null, "hooks": [
+      { "type": "command",
+        "command": "python3 /path/to/send.py WORKING --source codex",
+        "timeout": 5, "async": true }
+    ] }
+  ],
+  "PermissionRequest": [
+    { "matcher": null, "hooks": [
+      { "type": "command",
+        "command": "python3 /path/to/send.py PERMISSION --source codex",
+        "timeout": 5, "async": true }
+    ] }
+  ],
+  "Stop": [
+    { "matcher": null, "hooks": [
+      { "type": "command",
+        "command": "python3 /path/to/send.py DONE --source codex",
+        "timeout": 5, "async": true }
+    ] }
+  ]
+}
 ```
 
-…or pass flags directly:
-
-```bash
-python3 send.py WORKING --source codex --session "$CODEX_SESSION_ID"
-```
+> **One-time trust step:** Codex requires you to approve unfamiliar hooks
+> on first use. Start `codex` interactively once — the startup review
+> dialog will surface the new hooks; pick **Trust all and continue**.
+> After that, both `codex` and `codex exec` will fire the hooks. If you
+> later edit `hooks.json`, re-trust the same way.
 
 #### Antigravity
 
@@ -125,7 +148,7 @@ python3 /path/to/send.py INPUT
 | field        | priority (high → low)                                                     |
 |--------------|----------------------------------------------------------------------------|
 | `session_id` | `--session` → positional arg → `$RP2040_SESSION_ID` → stdin JSON → `manual` |
-| `source`     | `--source` → `$RP2040_SOURCE` → stdin JSON shape (Claude Code) → `unknown`  |
+| `source`     | `--source` → `$RP2040_SOURCE` → stdin shape (Codex `turn_id` → Claude Code) → `unknown` |
 
 Each `(source, session_id)` pair gets its own file (`/tmp/rp2040-status/<source>-<id>`),
 so multiple tools running concurrently never collide on a shared `manual` slot.
