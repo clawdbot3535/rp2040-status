@@ -34,13 +34,30 @@ PRIORITY = {
 }
 
 
+# USB-Vendor-ID des RP2040 (Raspberry Pi / MicroPython). Andere
+# usbmodem-Geraete (z.B. ein ESP32, VID 0x303A) werden so nicht gegriffen.
+RP2040_VID = 0x2E8A
+
+
 def find_device() -> Optional[str]:
-    """Findet den RP2040 USB-Serial Port."""
-    for pattern in ["/dev/cu.usbmodem*", "/dev/ttyACM*"]:
-        devices = sorted(glob.glob(pattern))
-        if devices:
-            return devices[0]
-    return None
+    """Findet den RP2040 USB-Serial Port.
+
+    Mit pyserial wird ausschliesslich per USB-Vendor-ID identifiziert, damit
+    fremde usbmodem-Geraete nie versehentlich angesprochen werden. Ohne
+    pyserial bleibt nur einfaches Globbing (kann bei mehreren usbmodem-
+    Geraeten das falsche treffen).
+    """
+    try:
+        from serial.tools import list_ports
+    except ImportError:
+        for pattern in ["/dev/cu.usbmodem*", "/dev/ttyACM*"]:
+            devices = sorted(glob.glob(pattern))
+            if devices:
+                return devices[0]
+        return None
+
+    matches = sorted(p.device for p in list_ports.comports() if p.vid == RP2040_VID)
+    return matches[0] if matches else None
 
 
 def open_serial(device: str):
