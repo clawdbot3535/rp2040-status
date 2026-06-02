@@ -53,10 +53,24 @@ The LED runs a short red→green→blue→yellow startup sweep on boot.
 
 ### 2. Install the broker
 
-Requires Python 3 and (optionally) `pyserial`:
+Requires Python 3 and `pyserial`. `pyserial` lets the broker identify the
+RP2040 by its USB vendor id (`0x2E8A`) instead of grabbing the first
+`/dev/cu.usbmodem*` it sees — important if any other USB-serial board (e.g. an
+ESP32) is also connected. Without it the broker falls back to `stty` + a raw
+write and picks devices by name only, which can bind to the wrong board.
 
 ```bash
-pip install pyserial   # optional; falls back to stty + raw write
+pip install pyserial
+```
+
+On Homebrew Python (PEP 668 "externally-managed"), install into a project venv
+and point the service at it:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install pyserial
+# then run the broker with .venv/bin/python3 (set this in the launchd plist /
+# systemd unit)
 ```
 
 ### 3. Run the broker
@@ -93,6 +107,48 @@ automatically:
 ```bash
 echo '{"session_id":"abc"}' | python3 send.py WORKING
 ```
+
+A complete wiring in `~/.claude/settings.json` looks like this:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command",
+        "command": "python3 /path/to/send.py WORKING", "timeout": 3 } ] }
+    ],
+    "PreToolUse": [
+      { "hooks": [ { "type": "command",
+        "command": "python3 /path/to/send.py WORKING", "timeout": 3 } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command",
+        "command": "python3 /path/to/send.py INPUT", "timeout": 3 } ] }
+    ],
+    "PermissionRequest": [
+      { "hooks": [ { "type": "command",
+        "command": "python3 /path/to/send.py PERMISSION", "timeout": 3 } ] }
+    ]
+  }
+}
+```
+
+> **Don't use `--all` on `PreToolUse`.** Each hook invocation already
+> carries the current session's `session_id` on stdin, so `send.py` updates
+> exactly the right file. Adding `--all` overwrites *every* active session
+> file — including the `INPUT` state another concurrent `claude` session
+> just wrote — and was the main source of "LED stuck on blue" reports when
+> running multiple Claude sessions in parallel.
+
+> **Sub-agents (`Task` tool) and `SubagentStop`.** When the main session
+> spawns a sub-agent, the sub-agent's hook payloads carry the **parent's**
+> `session_id` (plus a separate `agent_id`). PreToolUse from inside the
+> sub-agent therefore refreshes the parent's status file, and the parent's
+> own `Stop` hook eventually flips it to `INPUT` — no extra hook needed.
+>
+> Do **not** wire `SubagentStop` → `OFF`. It would delete the parent's
+> file (same `session_id`), causing a brief `OFF` flicker between
+> sub-agent completion and the parent's next tool call.
 
 #### Codex CLI
 
@@ -179,6 +235,11 @@ Config lives in `/tmp/rp2040-status/.config`.
   kickstart -k gui/$UID/com.rp2040-status.broker` recycles it.
 - **Broker can't find device** — confirm the RP2040 enumerates as
   `/dev/cu.usbmodem*` (macOS) or `/dev/ttyACM*` (Linux).
+- **LED never updates, broker "connected" to the wrong board** — with another
+  USB-serial device attached (e.g. an ESP32), make sure `pyserial` is installed
+  so the broker can select by vendor id `0x2E8A`. The log line `Verbunden: …`
+  shows which port it actually bound to. Without `pyserial` it picks the first
+  `usbmodem`/`ttyACM` by name and may silently write to the wrong device.
 - **State stuck after crash** — clear `/tmp/rp2040-status/` and restart the
   broker.
 
