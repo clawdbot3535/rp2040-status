@@ -6,7 +6,11 @@ import glob
 import hashlib
 import json
 import os
+import time
 from typing import List, Optional, Tuple
+
+from focus import focus_session
+from serial_link import SerialLink, find_device
 
 STATUS_DIR = "/tmp/rp2040-status"
 CONFIG_FILE = os.path.join(STATUS_DIR, ".config")
@@ -84,3 +88,76 @@ def get_stale_seconds():
     if not cfg.get("timeout_enabled", True):
         return None
     return cfg.get("stale_seconds", DEFAULT_STALE_SECONDS)
+
+
+def _read_focus(path: str):
+    try:
+        with open(path) as f:
+            return json.load(f).get("focus")
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def handle_incoming(line: str, key_map: dict) -> bool:
+    """Verarbeitet eine Zeile vom Display. Gibt True zurueck, wenn ein Resend
+    erzwungen werden soll (z.B. nach 'ready')."""
+    line = line.strip()
+    if line == "ready":
+        return True
+    if line.startswith("focus "):
+        key = line[len("focus "):].strip()
+        path = key_map.get(key)
+        if path:
+            focus_session(_read_focus(path))
+    return False
+
+
+def main() -> None:
+    print(f"Display-Service gestartet (poll: {POLL_MS}ms)")
+    os.makedirs(STATUS_DIR, exist_ok=True)
+    link = SerialLink()
+    last_frame = None
+    key_map = {}
+    last_device_check = 0
+
+    while True:
+        now = time.time()
+
+        if not link.is_open() and now - last_device_check > 5:
+            device = find_device(ESP32S3_VID)
+            if device:
+                try:
+                    link.open(device)
+                    last_frame = None  # Resend nach (Re)connect
+                    print(f"Display verbunden: {device}")
+                except Exception as e:
+                    print(f"Verbindungsfehler: {e}")
+            last_device_check = now
+
+        if link.is_open():
+            try:
+                for line in link.read_lines():
+                    if handle_incoming(line, key_map):
+                        last_frame = None
+            except Exception:
+                link.close()
+                last_device_check = 0
+
+        frame, key_map = build_frame(read_sessions(STATUS_DIR, get_stale_seconds(), now))
+        if frame != last_frame and link.is_open():
+            try:
+                link.write_line(frame)
+                last_frame = frame
+            except Exception:
+                link.close()
+                last_device_check = 0
+                print("Schreibfehler — Reconnect erzwungen")
+
+        time.sleep(POLL_MS / 1000)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nDisplay-Service beendet.")

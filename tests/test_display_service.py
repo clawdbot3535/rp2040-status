@@ -46,3 +46,21 @@ def test_read_sessions_filters_stale_without_deleting(tmp_path):
     sessions = ds.read_sessions(str(tmp_path), stale_seconds=600, now=1000)
     assert sessions == []
     assert os.path.exists(os.path.join(str(tmp_path), "codex-old"))
+
+def test_handle_incoming_focus_calls_backend(monkeypatch):
+    called = {}
+    monkeypatch.setattr(ds, "focus_session", lambda obj: called.setdefault("obj", obj) or True)
+    key_map = {"abc123": "/tmp/rp2040-status/codex-x"}
+    monkeypatch.setattr(ds, "_read_focus", lambda path: {"backend": "iterm2", "session_id": "S"})
+    resend = ds.handle_incoming("focus abc123", key_map)
+    assert called["obj"] == {"backend": "iterm2", "session_id": "S"}
+    assert resend is False
+
+def test_handle_incoming_ready_requests_resend():
+    assert ds.handle_incoming("ready", {}) is True
+
+def test_handle_incoming_unknown_key_is_noop(monkeypatch):
+    flag = {"called": False}
+    monkeypatch.setattr(ds, "focus_session", lambda obj: flag.__setitem__("called", True))
+    assert ds.handle_incoming("focus deadbe", {}) is False
+    assert flag["called"] is False
