@@ -50,3 +50,22 @@ def test_update_all_preserves_enriched_fields(tmp_path, monkeypatch):
     assert rec["project"] == "rp2040-status"
     assert rec["branch"] == "main"
     assert rec["focus"] == {"backend": "iterm2", "session_id": "S1"}
+
+def test_resolve_focus_tmux_when_in_pane(monkeypatch):
+    import send
+    monkeypatch.setattr(send, "_tmux_pane_for_self", lambda: "%7")
+    monkeypatch.setenv("ITERM_SESSION_ID", "w0t1p0:GUID")
+    assert send.resolve_focus() == {
+        "backend": "tmux", "pane": "%7", "iterm_session": "w0t1p0:GUID"}
+
+def test_resolve_focus_iterm2_when_not_in_tmux(monkeypatch):
+    import send
+    monkeypatch.setattr(send, "_tmux_pane_for_self", lambda: None)
+    monkeypatch.setenv("ITERM_SESSION_ID", "w0t1p0:GUID")
+    assert send.resolve_focus() == {"backend": "iterm2", "session_id": "w0t1p0:GUID"}
+
+def test_resolve_focus_none_when_nothing(monkeypatch):
+    import send
+    monkeypatch.setattr(send, "_tmux_pane_for_self", lambda: None)
+    monkeypatch.delenv("ITERM_SESSION_ID", raising=False)
+    assert send.resolve_focus() is None

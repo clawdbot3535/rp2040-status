@@ -113,8 +113,56 @@ def resolve_branch(cwd: str) -> str:
         return ""
 
 
+def _tmux_pane_for_self() -> Optional[str]:
+    """Findet die tmux-Pane, in der dieser Prozess (der Hook) laeuft, ueber den
+    Prozessbaum: gleicht die Ahnen-PIDs gegen die pane_pids des tmux-Servers ab.
+    Funktioniert auch ohne $TMUX im Environment (fragt den Server direkt).
+    Gibt die pane_id (z.B. '%3') zurueck oder None, wenn nicht in tmux."""
+    try:
+        panes = subprocess.run(
+            ["tmux", "list-panes", "-a", "-F", "#{pane_pid} #{pane_id}"],
+            capture_output=True, text=True, timeout=2,
+        )
+        if panes.returncode != 0:
+            return None
+        pane_by_pid = {}
+        for line in panes.stdout.splitlines():
+            parts = line.split()
+            if len(parts) == 2:
+                pane_by_pid[parts[0]] = parts[1]
+        if not pane_by_pid:
+            return None
+        ps = subprocess.run(
+            ["ps", "-axo", "pid=,ppid="], capture_output=True, text=True, timeout=2,
+        )
+        parent = {}
+        for line in ps.stdout.splitlines():
+            f = line.split()
+            if len(f) == 2:
+                parent[f[0]] = f[1]
+        pid = str(os.getpid())
+        for _ in range(50):
+            if pid in pane_by_pid:
+                return pane_by_pid[pid]
+            pid = parent.get(pid)
+            if not pid or pid == "1":
+                break
+        return None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
 def resolve_focus() -> Optional[dict]:
+    """Waehlt das Fokus-Ziel: tmux-Pane wenn der Agent in tmux laeuft, sonst
+    iTerm2-Session. Bei tmux wird die iTerm2-Session (falls bekannt) mitgefuehrt,
+    damit das Terminal-Fenster zusaetzlich nach vorne kommt."""
     sid = os.environ.get("ITERM_SESSION_ID")
+    pane = _tmux_pane_for_self()
+    if pane:
+        focus = {"backend": "tmux", "pane": pane}
+        if sid:
+            focus["iterm_session"] = sid
+        return focus
     if sid:
         return {"backend": "iterm2", "session_id": sid}
     return None

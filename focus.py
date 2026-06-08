@@ -46,6 +46,38 @@ def _focus_iterm2(session_id: str) -> bool:
         return False
 
 
+def _focus_tmux(pane: str, iterm_session: str = "") -> bool:
+    """Selektiert die tmux-Pane (Fenster + Pane + Client-Session) und holt das
+    umgebende Terminal nach vorne. iterm_session bevorzugt (exaktes Fenster),
+    sonst iTerm2 nur aktivieren."""
+    if not pane:
+        return False
+    try:
+        sel = subprocess.run(
+            ["tmux", "select-pane", "-t", pane],
+            capture_output=True, text=True, timeout=5,
+        )
+        # Client (falls angehaengt) auf die Session/Fenster der Pane schalten.
+        subprocess.run(
+            ["tmux", "switch-client", "-t", pane],
+            capture_output=True, text=True, timeout=5,
+        )
+        ok = sel.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if iterm_session:
+        _focus_iterm2(iterm_session)
+    elif ok:
+        try:
+            subprocess.run(
+                ["osascript", "-e", 'tell application "iTerm2" to activate'],
+                capture_output=True, text=True, timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return ok
+
+
 def focus_session(focus_obj) -> bool:
     """True bei erfolgreichem Fokus, sonst False (no-op)."""
     if not focus_obj or not isinstance(focus_obj, dict):
@@ -53,4 +85,6 @@ def focus_session(focus_obj) -> bool:
     backend = focus_obj.get("backend")
     if backend == "iterm2":
         return _focus_iterm2(focus_obj.get("session_id", ""))
+    if backend == "tmux":
+        return _focus_tmux(focus_obj.get("pane", ""), focus_obj.get("iterm_session", ""))
     return False
