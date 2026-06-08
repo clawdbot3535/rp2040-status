@@ -28,9 +28,12 @@ def is_enabled() -> bool:
 
 
 def resolve_keys(source, action):
-    """Token-Sequenz fuer (source, action): source-spezifisch > '*' > Code-Default."""
+    """Token-Sequenz fuer (source, action): source-spezifisch > '*' > Code-Default.
+    Gibt immer eine Liste von Strings zurueck (ungueltige Keymap-Werte fallen durch)."""
     km = _load_keymap()
     for scope in (source, "*"):
         if scope and scope in km and isinstance(km[scope], dict) and action in km[scope]:
-            return km[scope][action]
-    return _DEFAULTS.get(action)
+            val = km[scope][action]
+            if isinstance(val, list) and all(isinstance(t, str) for t in val):
+                return val
+    return _DEFAULTS.get(action, [])

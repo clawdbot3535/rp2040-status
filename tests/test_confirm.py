@@ -27,3 +27,12 @@ def test_is_enabled_default_true(monkeypatch):
 def test_is_enabled_kill_switch(monkeypatch):
     monkeypatch.setattr(confirm, "_load_keymap", lambda: {"enabled": False})
     assert confirm.is_enabled() is False
+
+def test_resolve_keys_unknown_action_returns_empty(monkeypatch):
+    monkeypatch.setattr(confirm, "_load_keymap", lambda: {})
+    assert confirm.resolve_keys("codex", "bogus") == []
+
+def test_resolve_keys_invalid_value_falls_back(monkeypatch):
+    # nicht-Listen-Wert aus hand-editierter keymap.json -> Default greift
+    monkeypatch.setattr(confirm, "_load_keymap", lambda: {"*": {"approve": "y"}})
+    assert confirm.resolve_keys("codex", "approve") == ["y", "Enter"]
