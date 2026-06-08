@@ -11,10 +11,16 @@ import threading
 import serial
 
 
-def reader(conn):
+def reader(conn, stop):
     buf = b""
-    while True:
-        buf += conn.read(256)
+    while not stop.is_set():
+        try:
+            chunk = conn.read(256)
+        except serial.SerialException:
+            break
+        if not chunk:
+            continue
+        buf += chunk
         while b"\n" in buf:
             line, buf = buf.split(b"\n", 1)
             print("RX:", line.decode(errors="replace").strip())
@@ -25,17 +31,21 @@ def main():
         print("usage: mock_display.py <serial-port>")
         return 1
     conn = serial.Serial(sys.argv[1], 115200, timeout=0.1)
-    threading.Thread(target=reader, args=(conn,), daemon=True).start()
+    stop = threading.Event()
+    threading.Thread(target=reader, args=(conn, stop), daemon=True).start()
     print("ready 'r' | focus '<key>' | quit 'q'")
-    for line in sys.stdin:
-        cmd = line.strip()
-        if cmd == "q":
-            break
-        elif cmd == "r":
-            conn.write(b"ready\n")
-        elif cmd:
-            conn.write(f"focus {cmd}\n".encode())
-    conn.close()
+    try:
+        for line in sys.stdin:
+            cmd = line.strip()
+            if cmd == "q":
+                break
+            elif cmd == "r":
+                conn.write(b"ready\n")
+            elif cmd:
+                conn.write(f"focus {cmd}\n".encode())
+    finally:
+        stop.set()
+        conn.close()
     return 0
 
 
