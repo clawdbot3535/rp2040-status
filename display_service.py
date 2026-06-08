@@ -125,7 +125,6 @@ def handle_incoming(line: str, key_map: dict) -> bool:
             path = key_map.get(key)
             if path:
                 confirm_action(_read_record(path), action)
-        return False
     return False
 
 
