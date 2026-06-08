@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.user.rp2040-display</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/USERNAME/Dev/rp2040-status/.venv/bin/python3</string>
+    <string>/Users/USERNAME/Dev/rp2040-status/display_service.py</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/rp2040-display.log</string>
+  <key>StandardErrorPath</key><string>/tmp/rp2040-display.err</string>
+</dict>
+</plist>
