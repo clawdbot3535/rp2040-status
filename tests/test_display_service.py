@@ -35,6 +35,11 @@ def test_build_frame_sanitizes_pipe_and_newline(tmp_path):
     frame, _ = ds.build_frame(sessions)
     assert "a/b c" in frame
 
+def test_build_frame_empty():
+    frame, key_map = ds.build_frame([])
+    assert frame == "LIST 0\nEND"
+    assert key_map == {}
+
 def test_read_sessions_filters_stale_without_deleting(tmp_path):
     _write(str(tmp_path), "codex-old", status="WORKING", ts=0, source="codex",
            id="old", project="", branch="", title="")

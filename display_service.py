@@ -6,7 +6,7 @@ import glob
 import hashlib
 import json
 import os
-import time
+from typing import List, Optional, Tuple
 
 STATUS_DIR = "/tmp/rp2040-status"
 CONFIG_FILE = os.path.join(STATUS_DIR, ".config")
@@ -26,7 +26,7 @@ def _sanitize(value) -> str:
     return str(value or "").replace("|", "/").replace("\n", " ").replace("\r", " ")
 
 
-def read_sessions(status_dir: str, stale_seconds, now: float):
+def read_sessions(status_dir: str, stale_seconds: Optional[float], now: float) -> List[Tuple[str, dict]]:
     """Liste von (path, record). Filtert stale, loescht NICHTS."""
     if not os.path.isdir(status_dir):
         return []
@@ -46,13 +46,16 @@ def read_sessions(status_dir: str, stale_seconds, now: float):
     return out
 
 
-def build_frame(sessions):
+def build_frame(sessions: List[Tuple[str, dict]]) -> Tuple[str, dict]:
     """Baut den LIST-Frame-String + key->path-Map. Neueste Session zuerst."""
     sessions = sorted(sessions, key=lambda pr: pr[1].get("ts", 0), reverse=True)
     lines = [f"LIST {len(sessions)}"]
     key_map = {}
     for path, rec in sessions:
         key = derive_key(path)
+        if key in key_map and key_map[key] != path:
+            # 6-Hex-Kollision: auf vollen Hash erweitern (deterministisch, eindeutig).
+            key = hashlib.sha1(os.path.basename(path).encode()).hexdigest()
         key_map[key] = path
         row = "|".join([
             key,
@@ -67,6 +70,7 @@ def build_frame(sessions):
     return "\n".join(lines), key_map
 
 
+# Bewusst dupliziert aus broker.py: broker.py bleibt per Design unveraendert.
 def read_config() -> dict:
     try:
         with open(CONFIG_FILE) as f:
