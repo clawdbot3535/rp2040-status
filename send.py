@@ -129,7 +129,7 @@ def _read_existing(path: str) -> dict:
 
 
 def write_status(session_id: str, status: str, source: str,
-                 project: str = "", branch=None, title: str = "",
+                 project: str = "", branch: Optional[str] = None, title: str = "",
                  focus: Optional[dict] = None) -> None:
     """Schreibt/merged Status-Datei. status/ts immer neu; project/branch/title/focus
     werden beibehalten, wenn das neue Event sie nicht liefert."""
@@ -171,14 +171,10 @@ def update_all_sessions(status: str) -> None:
         if os.path.basename(path).startswith("."):
             continue
         try:
-            existing_source = "unknown"
-            try:
-                with open(path) as f:
-                    existing_source = json.load(f).get("source", "unknown")
-            except (json.JSONDecodeError, OSError):
-                pass
+            old = _read_existing(path)
+            record = {**old, "status": status, "ts": now, "source": old.get("source", "unknown")}
             with open(path, "w") as f:
-                json.dump({"status": status, "ts": now, "source": existing_source}, f)
+                json.dump(record, f)
         except OSError:
             pass
 
