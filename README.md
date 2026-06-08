@@ -217,6 +217,81 @@ python3 send.py DONE
 python3 send.py OFF
 ```
 
+## Touch display (ESP32-S3)
+
+An optional second device runs **alongside** the LED: a Waveshare
+ESP32-S3-Touch-LCD-1.69 (240×280 ST7789, CST816T touch). It shows the full list
+of sessions with provider-themed colours, and a tap brings the matching terminal
+to the front. The LED path (`broker.py`) is untouched — both devices are driven
+in parallel from the same status files.
+
+```
+send.py ──► /tmp/rp2040-status/<source>-<session>
+                     │  (one file per session, enriched: project/branch/title/focus)
+        ┌────────────┴─────────────┐
+        ▼                          ▼
+   broker.py                 display_service.py
+   │ aggregate               │ full session list
+   ▼ USB-serial              ▼ USB-serial  ▲ taps back
+ RP2040 LED              ESP32-S3 display ──focus <key>──► focus.py ──► iTerm2 / tmux
+```
+
+- `display_service.py` — host daemon. Discovers the display by USB vendor id
+  `0x303A`, sends a line-based `LIST` frame on every change, and resolves taps
+  (`focus <key>`) through `focus.py`. Reads the same files as the broker but
+  **never deletes** them (the broker owns pruning).
+- `focus.py` — focus backends. `send.py` auto-selects per session: if the agent
+  runs inside a tmux pane it stores `{"backend":"tmux","pane":"%N"}` (the pane is
+  found via process-tree matching, so it works even when `$TMUX` is absent from
+  the hook environment); otherwise `{"backend":"iterm2","session_id":...}` from
+  `$ITERM_SESSION_ID`. A tmux tap runs `select-pane`/`switch-client`; an iTerm2
+  tap reveals the session via AppleScript.
+- `display/` — MicroPython firmware: `boot.py` (holds the SYS_EN power latch on
+  GPIO41 early), `main.py` (frame parser, themed render, touch), and `lib/`
+  drivers (`st7789py`, `cst816`, fonts).
+
+### Flash and deploy
+
+The display runs MicroPython. Flash the firmware once, then copy the files:
+
+```bash
+PORT=/dev/cu.usbmodemXXXX   # the 0x303A device — use `mpremote connect list`
+# 1. MicroPython (once). The image is the ESP32-S3 SPIRAM_OCT build.
+esptool --port $PORT erase-flash
+esptool --port $PORT --baud 460800 write-flash 0 ESP32_GENERIC_S3-SPIRAM_OCT-*.bin
+# 2. App + drivers
+mpremote connect $PORT fs cp display/boot.py :boot.py
+mpremote connect $PORT fs mkdir lib
+mpremote connect $PORT fs cp display/lib/st7789py.py :lib/st7789py.py
+mpremote connect $PORT fs cp display/lib/vga2_8x8.py :lib/vga2_8x8.py
+mpremote connect $PORT fs cp display/lib/vga2_16x16.py :lib/vga2_16x16.py
+mpremote connect $PORT fs cp display/lib/cst816.py :lib/cst816.py
+mpremote connect $PORT fs cp display/main.py :main.py
+mpremote connect $PORT reset
+```
+
+Then run the display daemon (a LaunchAgent template is in
+`launchd/com.user.rp2040-display.plist` — substitute your username):
+
+```bash
+.venv/bin/python3 display_service.py
+```
+
+The host-side tests cover `send.py`, `display_service.py`, `focus.py` and
+`serial_link.py`: `.venv/bin/pytest tests/`.
+
+### Notes from bring-up
+
+- **240×280 needs a custom rotation table.** The stock `st7789py` only knows
+  240×320 / 240×240 / 135×240 / 128×128; `main.py` passes `custom_rotations`
+  with `ystart=20` (the 280-row window sits centred in the 320-row controller).
+- **After flashing, physically replug the board.** The ESP32-S3 USB-Serial-JTAG
+  unit does not cleanly restart MicroPython's REPL after an esptool reset until a
+  real power cycle — unplug/replug, then `mpremote` works.
+- **No C++ fallback was needed.** MicroPython drives the panel, touch and power
+  latch fine on this board; the native-firmware fallback in the design doc stayed
+  unused.
+
 ## Configuration
 
 Stale-session pruning can be toggled at runtime:
@@ -248,3 +323,9 @@ Config lives in `/tmp/rp2040-status/.config`.
 - [Waveshare RP2040-Zero](https://www.waveshare.com/rp2040-zero.htm)
 - WS2812B on GPIO16 (built into the board)
 - USB-C cable to the host
+
+Optional touch display:
+
+- [Waveshare ESP32-S3-Touch-LCD-1.69](https://www.waveshare.com/esp32-s3-touch-lcd-1.69.htm)
+  (240×280 ST7789, CST816T touch, 8 MB octal PSRAM / 16 MB flash)
+- USB-C cable to the host (USB vendor id `0x303A`)
