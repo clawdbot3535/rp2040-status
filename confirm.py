@@ -5,7 +5,6 @@ Getrennt von focus.py, weil dies Eingaben injiziert (zustandsaendernd, riskant).
 import json
 import os
 import subprocess
-import focus
 
 _DEFAULTS = {"approve": ["y", "Enter"], "reject": ["n", "Enter"], "continue": ["Enter"]}
 _KEYMAP_PATHS = (
@@ -73,7 +72,7 @@ def _iterm_payload(tokens):
     """Bildet eine Token-Sequenz auf einen iTerm2 'write text'-Payload ab.
     v1 unterstuetzt [literal..., 'Enter'] oder ['Enter']. Sonst None (uebersprungen)."""
     if tokens == ["Enter"]:
-        return ""
+        return ""  # write text "" laesst iTerm2 ein blankes Newline (~Enter) senden
     if tokens and tokens[-1] == "Enter" and all(t not in _SPECIAL for t in tokens[:-1]):
         return "".join(tokens[:-1])
     return None
@@ -98,8 +97,10 @@ def _send_iterm2(session_id, tokens) -> bool:
         print("confirm: iTerm2 unterstuetzt diese Tokens in v1 nicht:", tokens)
         return False
     try:
+        # "wNtMpK:GUID" -> "GUID" (iTerm2 unique id); ohne Doppelpunkt unveraendert.
+        guid = session_id.split(":", 1)[1] if ":" in session_id else session_id
         r = subprocess.run(
-            ["osascript", "-e", _ITERM2_WRITE, focus._guid(session_id), payload],
+            ["osascript", "-e", _ITERM2_WRITE, guid, payload],
             capture_output=True, text=True, timeout=5)
         return r.returncode == 0 and r.stdout.strip() == "ok"
     except (OSError, subprocess.SubprocessError):
