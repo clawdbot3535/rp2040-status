@@ -10,6 +10,7 @@ import time
 from typing import List, Optional, Tuple
 
 from focus import focus_session
+from confirm import confirm_action
 from serial_link import SerialLink, find_device
 
 STATUS_DIR = "/tmp/rp2040-status"
@@ -98,6 +99,14 @@ def _read_focus(path: str):
         return None
 
 
+def _read_record(path: str):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def handle_incoming(line: str, key_map: dict) -> bool:
     """Verarbeitet eine Zeile vom Display. Gibt True zurueck, wenn ein Resend
     erzwungen werden soll (z.B. nach 'ready')."""
@@ -109,6 +118,14 @@ def handle_incoming(line: str, key_map: dict) -> bool:
         path = key_map.get(key)
         if path:
             focus_session(_read_focus(path))
+    if line.startswith("act "):
+        parts = line.split()
+        if len(parts) == 3:
+            key, action = parts[1], parts[2]
+            path = key_map.get(key)
+            if path:
+                confirm_action(_read_record(path), action)
+        return False
     return False
 
 

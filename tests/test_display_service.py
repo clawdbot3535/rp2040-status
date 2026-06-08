@@ -64,3 +64,29 @@ def test_handle_incoming_unknown_key_is_noop(monkeypatch):
     monkeypatch.setattr(ds, "focus_session", lambda obj: flag.__setitem__("called", True))
     assert ds.handle_incoming("focus deadbe", {}) is False
     assert flag["called"] is False
+
+def test_handle_incoming_act_calls_confirm(monkeypatch):
+    called = {}
+    monkeypatch.setattr(ds, "confirm_action",
+                        lambda rec, action: called.setdefault("args", (rec, action)) or True)
+    monkeypatch.setattr(ds, "_read_record",
+                        lambda path: {"source": "codex", "focus": {"backend": "tmux", "pane": "%2"}})
+    key_map = {"abc123": "/tmp/rp2040-status/codex-x"}
+    resend = ds.handle_incoming("act abc123 approve", key_map)
+    assert called["args"][1] == "approve"
+    assert called["args"][0]["source"] == "codex"
+    assert resend is False
+
+def test_handle_incoming_act_unknown_key_noop(monkeypatch):
+    flag = {"called": False}
+    monkeypatch.setattr(ds, "confirm_action",
+                        lambda rec, action: flag.__setitem__("called", True))
+    assert ds.handle_incoming("act deadbe approve", {}) is False
+    assert flag["called"] is False
+
+def test_handle_incoming_act_malformed_noop(monkeypatch):
+    flag = {"called": False}
+    monkeypatch.setattr(ds, "confirm_action",
+                        lambda rec, action: flag.__setitem__("called", True))
+    assert ds.handle_incoming("act abc123", {"abc123": "/x"}) is False  # fehlende action
+    assert flag["called"] is False
