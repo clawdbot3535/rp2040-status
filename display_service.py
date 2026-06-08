@@ -134,12 +134,15 @@ def main() -> None:
                     print(f"Verbindungsfehler: {e}")
             last_device_check = now
 
+        # key_map stammt aus dem zuletzt gesendeten Frame (eine Iteration alt) —
+        # genau der Frame, den das Display gerade zeigt, also passt der Tap-Key.
         if link.is_open():
             try:
                 for line in link.read_lines():
                     if handle_incoming(line, key_map):
                         last_frame = None
-            except Exception:
+            except Exception as e:
+                print(f"Lesefehler — Reconnect erzwungen: {e}")
                 link.close()
                 last_device_check = 0
 
