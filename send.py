@@ -128,6 +128,23 @@ def _read_existing(path: str) -> dict:
         return {}
 
 
+def _atomic_write_json(path: str, record: dict) -> None:
+    """Schreibt JSON atomar: in eine dot-praefixierte Temp-Datei (von den
+    Lesern via '.'-Skip ignoriert), dann os.replace (atomar auf POSIX)."""
+    import tempfile
+    fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=STATUS_DIR)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(record, f)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def write_status(session_id: str, status: str, source: str,
                  project: str = "", branch: Optional[str] = None, title: str = "",
                  focus: Optional[dict] = None) -> None:
@@ -158,8 +175,7 @@ def write_status(session_id: str, status: str, source: str,
         "title": pick(title, "title"),
         "focus": focus if focus else old.get("focus"),
     }
-    with open(path, "w") as f:
-        json.dump(record, f)
+    _atomic_write_json(path, record)
 
 
 def update_all_sessions(status: str) -> None:
@@ -173,8 +189,7 @@ def update_all_sessions(status: str) -> None:
         try:
             old = _read_existing(path)
             record = {**old, "status": status, "ts": now, "source": old.get("source", "unknown")}
-            with open(path, "w") as f:
-                json.dump(record, f)
+            _atomic_write_json(path, record)
         except OSError:
             pass
 
