@@ -37,6 +37,7 @@ import argparse
 import glob
 import json
 import os
+import subprocess
 import sys
 import time
 from typing import Optional
@@ -95,8 +96,43 @@ def session_path(session_id: str, source: str) -> str:
     return os.path.join(STATUS_DIR, fname)
 
 
-def write_status(session_id: str, status: str, source: str) -> None:
-    """Schreibt Status-Datei fuer diese Session."""
+def resolve_project(cwd: str) -> str:
+    return os.path.basename(os.path.normpath(cwd)) if cwd else ""
+
+
+def resolve_branch(cwd: str) -> str:
+    if not cwd:
+        return ""
+    try:
+        out = subprocess.run(
+            ["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, timeout=2,
+        )
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def resolve_focus() -> Optional[dict]:
+    sid = os.environ.get("ITERM_SESSION_ID")
+    if sid:
+        return {"backend": "iterm2", "session_id": sid}
+    return None
+
+
+def _read_existing(path: str) -> dict:
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def write_status(session_id: str, status: str, source: str,
+                 project: str = "", branch=None, title: str = "",
+                 focus: Optional[dict] = None) -> None:
+    """Schreibt/merged Status-Datei. status/ts immer neu; project/branch/title/focus
+    werden beibehalten, wenn das neue Event sie nicht liefert."""
     os.makedirs(STATUS_DIR, exist_ok=True)
     path = session_path(session_id, source)
 
@@ -107,8 +143,23 @@ def write_status(session_id: str, status: str, source: str) -> None:
             pass
         return
 
+    old = _read_existing(path)
+
+    def pick(new, key):
+        return new if new else old.get(key, "")
+
+    record = {
+        "status": status,
+        "ts": time.time(),
+        "source": source or old.get("source", "") or "unknown",
+        "id": session_id,
+        "project": pick(project, "project"),
+        "branch": pick(branch, "branch"),
+        "title": pick(title, "title"),
+        "focus": focus if focus else old.get("focus"),
+    }
     with open(path, "w") as f:
-        json.dump({"status": status, "ts": time.time(), "source": source}, f)
+        json.dump(record, f)
 
 
 def update_all_sessions(status: str) -> None:
@@ -173,6 +224,7 @@ def parse_args(argv) -> argparse.Namespace:
         action="store_true",
         help="Alle aktiven Sessions auf neuen Status setzen.",
     )
+    p.add_argument("--title", default="", help="Optionaler Kurztitel fuer die Session.")
     return p.parse_args(argv)
 
 
@@ -202,7 +254,14 @@ def main() -> int:
     explicit_sid = args.session or args.session_pos
     sid = resolve_session_id(explicit_sid, stdin_data)
     source = resolve_source(args.source, stdin_data)
-    write_status(sid, cmd, source)
+    cwd = stdin_data.get("cwd") or os.environ.get("PWD", "")
+    project = resolve_project(cwd)
+    branch = resolve_branch(cwd) if cmd == "WORKING" else None
+    title = args.title or ""
+    focus = resolve_focus()
+
+    write_status(sid, cmd, source, project=project, branch=branch,
+                 title=title, focus=focus)
     return 0
 
 
