@@ -90,7 +90,8 @@ def handle_line(line):
             sessions = _pending
             _pending = None
             page = min(page, max(0, len(sessions) - 1))
-            render()
+            if _confirm_key is None:   # Overlay nicht ueberschreiben
+                render()
     elif line.startswith("S ") and _pending is not None:
         parts = line[2:].split("|")
         while len(parts) < 6:
@@ -242,11 +243,31 @@ def render():
 # --- Touch-Verarbeitung ---
 TAP_MAX_MOVE = 28
 TAP_DEBOUNCE_MS = 280   # ein Fingerdruck = eine Aktion (gegen Touch-Jitter)
+LONGPRESS_MS = 600      # halten -> Confirm-Screen (nur bei wartenden Agenten)
 GESTURE_LEFT = 0x03     # CST816: Wisch nach links  -> naechste Session
 GESTURE_RIGHT = 0x04    # CST816: Wisch nach rechts -> vorige Session
+ACTIONABLE = ("PERMISSION", "INPUT")
+_BTN = (("approve", "APPROVE"), ("reject", "REJECT"), ("continue", "CONTINUE"))
+_BTN_Y = (95, 135, 175)   # y-Start der 3 Confirm-Buttons
+_BTN_H = 34
 _touch_start = None  # (x, y, t)
 _last_xy = None
 _last_action_ms = -1000
+_confirm_key = None     # key der Session im Confirm-Modus, oder None
+_lp_fired = False       # Long-press in dieser Touch-Sequenz schon ausgeloest?
+_await_lift = False     # nach Long-press: erstes Loslassen ignorieren (Finger anheben)
+
+def render_confirm():
+    s = sessions[page]
+    fg, bg, accent, soft = theme_for(s["source"])
+    tft.fill(bg)
+    tft.fill_rect(0, 0, W, BANNER_H, accent)
+    _wcenter(fbig, "CONFIRM", (BANNER_H - LH_BIG) // 2, bg, accent)
+    tft.write(fsm, (s["project"] or s["source"])[:24], PAD_X, BANNER_H + 8, soft, bg)
+    for (action, label), y in zip(_BTN, _BTN_Y):
+        tft.fill_rect(PAD_X, y, W - 2 * PAD_X, _BTN_H, accent)
+        tft.write(fbig, label, PAD_X + 12, y + (_BTN_H - LH_BIG) // 2, bg, accent)
+    tft.write(fsm, "tap outside = cancel", PAD_X, H - LH - 6, soft, bg)
 
 def _nav(delta, now):
     global page, _last_action_ms
@@ -256,21 +277,73 @@ def _nav(delta, now):
         _last_action_ms = now
         render()
 
+def _send_act(action, now):
+    global _confirm_key, _last_action_ms
+    sys.stdout.write("act %s %s\n" % (_confirm_key, action))
+    _confirm_key = None
+    _last_action_ms = now
+    render()  # zurueck zur Session
+
 def handle_touch():
-    global _touch_start, _last_xy, _last_action_ms
+    global _touch_start, _last_xy, _last_action_ms, _confirm_key, _lp_fired, _await_lift
     touched, x, y, gesture = tp.read()
     now = time.ticks_ms()
     deb = time.ticks_diff(now, _last_action_ms) >= TAP_DEBOUNCE_MS
-    # Hardware-Swipe-Geste des CST816 (ueberall am Schirm, kein Jitter-Problem)
+
+    # --- Confirm-Modus: nur Taps auf Buttons / daneben ---
+    if _confirm_key is not None:
+        # Das Loslassen des Long-press selbst ignorieren (Finger nur anheben).
+        if _await_lift:
+            if not touched:
+                _await_lift = False
+                _touch_start = None
+                _last_xy = None
+            return
+        if touched:
+            if _touch_start is None:
+                _touch_start = (x, y, now)
+            _last_xy = (x, y)
+            return
+        if _touch_start is None or _last_xy is None:
+            _touch_start = None
+            return
+        ex, ey = _last_xy
+        _touch_start = None
+        _last_xy = None
+        if not deb:
+            return
+        for (action, _label), by in zip(_BTN, _BTN_Y):
+            if PAD_X <= ex <= W - PAD_X and by <= ey <= by + _BTN_H:
+                _send_act(action, now)
+                return
+        _confirm_key = None  # Tap daneben -> abbrechen
+        render()
+        return
+
+    # --- Hardware-Swipe ---
     if deb and gesture == GESTURE_LEFT:
-        _nav(1, now); _touch_start = None; _last_xy = None; return
+        _nav(1, now); _touch_start = None; _last_xy = None; _lp_fired = False; return
     if deb and gesture == GESTURE_RIGHT:
-        _nav(-1, now); _touch_start = None; _last_xy = None; return
+        _nav(-1, now); _touch_start = None; _last_xy = None; _lp_fired = False; return
+
     if touched:
         if _touch_start is None:
-            _touch_start = (x, y, now)
+            _touch_start = (x, y, now); _lp_fired = False
         _last_xy = (x, y)
+        # Long-press: gehalten, kaum Bewegung, Session wartet -> Confirm-Screen
+        sx, sy, st_ms = _touch_start
+        if (not _lp_fired and deb and sessions
+                and sessions[page]["status"] in ACTIONABLE
+                and time.ticks_diff(now, st_ms) >= LONGPRESS_MS
+                and abs(x - sx) <= TAP_MAX_MOVE and abs(y - sy) <= TAP_MAX_MOVE):
+            _lp_fired = True
+            _confirm_key = sessions[page]["key"]
+            _await_lift = True
+            _last_action_ms = now
+            render_confirm()
         return
+
+    # --- Release: Tap (wenn kein Long-press) ---
     if _touch_start is None or _last_xy is None:
         _touch_start = None
         return
@@ -279,6 +352,9 @@ def handle_touch():
     dx, dy = ex - sx, ey - sy
     _touch_start = None
     _last_xy = None
+    if _lp_fired:
+        _lp_fired = False
+        return
     if not deb:
         return
     # Tap (kleine Bewegung): Nav-Strip -> Blaettern, sonst -> Session fokussieren
