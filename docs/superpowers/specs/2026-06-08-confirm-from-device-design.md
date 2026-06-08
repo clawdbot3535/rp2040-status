@@ -80,10 +80,12 @@ def confirm_action(record: dict, action: str) -> bool:
   ```python
   _DEFAULTS = {"approve": ["y", "Enter"], "reject": ["n", "Enter"], "continue": ["Enter"]}
   ```
-- Optionale Override-Datei `keymap.json` (Repo-Root bzw. `~/.config/rp2040-status/keymap.json`):
+- Optionale Override-Datei `keymap.json` (Repo-Root bzw. `~/.config/rp2040-status/keymap.json`).
+  v1 startet ohne Quell-Overrides — alle Quellen (inkl. `claude-code`) nutzen die
+  generischen `y/n`-Defaults; pro-Quelle-Overrides werden bei Bedarf am echten Prompt
+  feinjustiert:
   ```json
   { "enabled": true,
-    "claude-code": { "approve": ["2","Enter"], "reject": ["3","Enter"] },
     "*": { "approve": ["y","Enter"], "reject": ["n","Enter"], "continue": ["Enter"] } }
   ```
 - Auflösung pro Aktion: `keymap[source][action]` → `keymap["*"][action]` → `_DEFAULTS[action]`.
