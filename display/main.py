@@ -132,11 +132,13 @@ def render():
 # --- Touch-Verarbeitung ---
 TAP_MAX_MOVE = 28
 SWIPE_MIN = 46
+TAP_DEBOUNCE_MS = 280   # ein Fingerdruck = eine Aktion (gegen Touch-Jitter)
 _touch_start = None  # (x, y, t)
 _last_xy = None
+_last_action_ms = -1000
 
 def handle_touch():
-    global _touch_start, _last_xy, page
+    global _touch_start, _last_xy, page, _last_action_ms
     touched, x, y, gesture = tp.read()
     now = time.ticks_ms()
     if touched:
@@ -152,20 +154,23 @@ def handle_touch():
     dx, dy = ex - sx, ey - sy
     _touch_start = None
     _last_xy = None
+    if time.ticks_diff(now, _last_action_ms) < TAP_DEBOUNCE_MS:
+        return  # zu kurz nach der letzten Aktion -> entprellen
     in_nav = sy >= H - NAV_H
     if in_nav and abs(dx) >= SWIPE_MIN and abs(dx) > abs(dy):
         if dx < 0 and page < len(sessions) - 1:
-            page += 1; render()
+            page += 1; _last_action_ms = now; render()
         elif dx > 0 and page > 0:
-            page -= 1; render()
+            page -= 1; _last_action_ms = now; render()
         return
     if abs(dx) <= TAP_MAX_MOVE and abs(dy) <= TAP_MAX_MOVE:
         if in_nav:
             if ex < W // 2 and page > 0:
-                page -= 1; render()
+                page -= 1; _last_action_ms = now; render()
             elif ex >= W // 2 and page < len(sessions) - 1:
-                page += 1; render()
+                page += 1; _last_action_ms = now; render()
         elif sessions:
+            _last_action_ms = now
             sys.stdout.write("focus %s\n" % sessions[page]["key"])
 
 # --- Main Loop ---
