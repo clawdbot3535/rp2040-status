@@ -10,6 +10,7 @@
     <string>-u</string>
     <string>/Users/USERNAME/Dev/rp2040-status/display_service.py</string>
   </array>
+  <key>WorkingDirectory</key><string>/Users/USERNAME/Dev/rp2040-status</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>/tmp/rp2040-display.log</string>
