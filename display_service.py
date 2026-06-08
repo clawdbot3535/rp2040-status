@@ -120,43 +120,46 @@ def main() -> None:
     key_map = {}
     last_device_check = 0
 
-    while True:
-        now = time.time()
+    try:
+        while True:
+            now = time.time()
 
-        if not link.is_open() and now - last_device_check > 5:
-            device = find_device(ESP32S3_VID)
-            if device:
+            if not link.is_open() and now - last_device_check > 5:
+                device = find_device(ESP32S3_VID)
+                if device:
+                    try:
+                        link.open(device)
+                        last_frame = None  # Resend nach (Re)connect
+                        print(f"Display verbunden: {device}")
+                    except Exception as e:
+                        print(f"Verbindungsfehler: {e}")
+                last_device_check = now
+
+            # key_map stammt aus dem zuletzt gesendeten Frame (eine Iteration alt) —
+            # genau der Frame, den das Display gerade zeigt, also passt der Tap-Key.
+            if link.is_open():
                 try:
-                    link.open(device)
-                    last_frame = None  # Resend nach (Re)connect
-                    print(f"Display verbunden: {device}")
+                    for line in link.read_lines():
+                        if handle_incoming(line, key_map):
+                            last_frame = None
                 except Exception as e:
-                    print(f"Verbindungsfehler: {e}")
-            last_device_check = now
+                    print(f"Lesefehler — Reconnect erzwungen: {e}")
+                    link.close()
+                    last_device_check = 0
 
-        # key_map stammt aus dem zuletzt gesendeten Frame (eine Iteration alt) —
-        # genau der Frame, den das Display gerade zeigt, also passt der Tap-Key.
-        if link.is_open():
-            try:
-                for line in link.read_lines():
-                    if handle_incoming(line, key_map):
-                        last_frame = None
-            except Exception as e:
-                print(f"Lesefehler — Reconnect erzwungen: {e}")
-                link.close()
-                last_device_check = 0
+            frame, key_map = build_frame(read_sessions(STATUS_DIR, get_stale_seconds(), now))
+            if frame != last_frame and link.is_open():
+                try:
+                    link.write_line(frame)
+                    last_frame = frame
+                except Exception:
+                    link.close()
+                    last_device_check = 0
+                    print("Schreibfehler — Reconnect erzwungen")
 
-        frame, key_map = build_frame(read_sessions(STATUS_DIR, get_stale_seconds(), now))
-        if frame != last_frame and link.is_open():
-            try:
-                link.write_line(frame)
-                last_frame = frame
-            except Exception:
-                link.close()
-                last_device_check = 0
-                print("Schreibfehler — Reconnect erzwungen")
-
-        time.sleep(POLL_MS / 1000)
+            time.sleep(POLL_MS / 1000)
+    finally:
+        link.close()
 
 
 if __name__ == "__main__":
