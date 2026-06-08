@@ -7,9 +7,19 @@ import vga2_8x8 as font
 from cst816 import CST816
 
 # --- Display (ST7789, 240x280, row-offset 20) ---
+# st7789py kennt 240x280 nicht ab Werk -> eigene Rotationstabelle.
+# Format je Rotation: (madctl, width, height, xstart, ystart, needs_swap).
+# 280-Zeilen-Fenster sitzt mit ystart=20 im 240x320-Controller (am Board verifiziert).
+_ROTATIONS = (
+    (0x00, 240, 280, 0, 20, False),
+    (0x60, 280, 240, 20, 0, False),
+    (0xc0, 240, 280, 0, 20, False),
+    (0xa0, 280, 240, 20, 0, False),
+)
 spi = SPI(1, baudrate=40_000_000, sck=Pin(6), mosi=Pin(7))
 tft = st7789.ST7789(spi, 240, 280, reset=Pin(8, Pin.OUT), dc=Pin(4, Pin.OUT),
-                    cs=Pin(5, Pin.OUT), backlight=Pin(15, Pin.OUT), rotation=0)
+                    cs=Pin(5, Pin.OUT), backlight=Pin(15, Pin.OUT), rotation=0,
+                    custom_rotations=_ROTATIONS)
 tp = CST816()
 
 W, H = 240, 280
