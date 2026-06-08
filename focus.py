@@ -41,7 +41,7 @@ def _focus_iterm2(session_id: str) -> bool:
             ["osascript", "-e", _ITERM2_SCRIPT, _guid(session_id)],
             capture_output=True, text=True, timeout=5,
         )
-        return res.returncode == 0
+        return res.returncode == 0 and res.stdout.strip() == "ok"
     except (OSError, subprocess.SubprocessError):
         return False
 
