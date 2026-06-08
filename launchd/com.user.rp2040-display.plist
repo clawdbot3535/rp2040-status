@@ -11,6 +11,10 @@
     <string>/Users/USERNAME/Dev/rp2040-status/display_service.py</string>
   </array>
   <key>WorkingDirectory</key><string>/Users/USERNAME/Dev/rp2040-status</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>/tmp/rp2040-display.log</string>
