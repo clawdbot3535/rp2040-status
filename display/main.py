@@ -4,6 +4,7 @@ import sys, select, time
 from machine import Pin, SPI
 import st7789py as st7789
 import vga2_8x8 as font
+import vga2_16x16 as bigfont
 from cst816 import CST816
 
 # --- Display (ST7789, 240x280, row-offset 20) ---
@@ -23,15 +24,21 @@ tft = st7789.ST7789(spi, 240, 280, reset=Pin(8, Pin.OUT), dc=Pin(4, Pin.OUT),
 tp = CST816()
 
 W, H = 240, 280
-NAV_H = 48
+# Layout an Buddy angelehnt: hohes Akzentband + Nav-Strip halten Inhalt von den
+# runden Display-Ecken weg; grosszuegiges horizontales Padding.
+BANNER_H = 59
+NAV_H = 80
+PAD_X = 17
+BODY_TOP = BANNER_H + 18   # 77
+NAV_TOP = H - NAV_H        # 200
 
-# Theme: (fg, bg, accent) je Source
+# Theme: (fg, bg, accent, soft) je Source. accent = Provider-Farbband oben.
 THEMES = {
-    "codex":       (st7789.color565(20, 24, 28), st7789.color565(245, 245, 240), st7789.color565(40, 200, 120)),
-    "claude-code": (st7789.color565(30, 20, 16), st7789.color565(245, 238, 228), st7789.color565(210, 110, 70)),
-    "antigravity": (st7789.color565(230, 230, 240), st7789.color565(18, 18, 26), st7789.color565(120, 160, 255)),
+    "codex":       (st7789.color565(24, 28, 32),   st7789.color565(236, 240, 234), st7789.color565(16, 170, 95),  st7789.color565(120, 130, 130)),
+    "claude-code": (st7789.color565(40, 24, 16),   st7789.color565(236, 222, 202), st7789.color565(196, 92, 52),  st7789.color565(150, 122, 96)),
+    "antigravity": (st7789.color565(225, 228, 240), st7789.color565(18, 18, 28),   st7789.color565(96, 140, 255),  st7789.color565(140, 146, 165)),
 }
-DEFAULT_THEME = (st7789.WHITE, st7789.BLACK, st7789.color565(0, 200, 220))
+DEFAULT_THEME = (st7789.WHITE, st7789.BLACK, st7789.color565(0, 200, 220), st7789.color565(120, 120, 120))
 
 def theme_for(source):
     return THEMES.get(source, DEFAULT_THEME)
@@ -70,24 +77,57 @@ def handle_line(line):
         _pending.append({"key": parts[0], "status": parts[1], "source": parts[2],
                          "project": parts[3], "branch": parts[4], "title": parts[5]})
 
+_WRAP_SEPS = "-_./ "
+
+def wrap_text(text, max_chars, max_lines):
+    """Bricht text in <=max_lines Zeilen a max_chars um; bevorzugt Trenner
+    (-_./ ), sonst harter Umbruch. Mehrzeilig wie Buddys Title-Block."""
+    out = []
+    rest = text or ""
+    while rest and len(out) < max_lines:
+        if len(rest) <= max_chars:
+            out.append(rest)
+            return out
+        cut = 0
+        for i in range(min(max_chars, len(rest) - 1), 0, -1):
+            if rest[i] in _WRAP_SEPS:
+                cut = i + 1
+                break
+        if cut <= 0:
+            cut = max_chars
+        out.append(rest[:cut])
+        rest = rest[cut:]
+    return out
+
 def render():
     if not sessions:
         tft.fill(st7789.BLACK)
         tft.text(font, "IDLE", W // 2 - 16, H // 2, st7789.color565(0, 200, 220), st7789.BLACK)
         return
     s = sessions[page]
-    fg, bg, accent = theme_for(s["source"])
+    fg, bg, accent, soft = theme_for(s["source"])
     tft.fill(bg)
-    tft.fill_rect(0, 0, W, 3, accent)
-    tft.text(font, s["status"][:20], 8, 16, accent, bg)
-    tft.text(font, s["project"][:28], 8, 40, fg, bg)
-    tft.text(font, s["branch"][:28], 8, 60, fg, bg)
+    # Provider-Akzentband (hoch genug fuer die runden Ecken), Status darin.
+    tft.fill_rect(0, 0, W, BANNER_H, accent)
+    tft.text(bigfont, s["status"][:12], PAD_X, (BANNER_H - 16) // 2, bg, accent)
+    # Body: Projekt gross (mehrzeilig), Branch/Titel klein darunter.
+    py = BODY_TOP
+    for ln in wrap_text(s["project"], 12, 2):
+        tft.text(bigfont, ln, PAD_X, py, fg, bg)
+        py += 20
+    py += 6
+    if s["branch"]:
+        tft.text(font, s["branch"][:24], PAD_X, py, soft, bg)
+        py += 16
     if s["title"]:
-        tft.text(font, s["title"][:28], 8, 84, fg, bg)
+        tft.text(font, s["title"][:24], PAD_X, py, fg, bg)
+    # Nav-Strip unten: Chevrons + Zaehler, von der unteren Kante weggehalten.
+    cy_big = NAV_TOP + (NAV_H - 16) // 2
+    cy_txt = NAV_TOP + (NAV_H - 8) // 2
     marker = "%d / %d" % (page + 1, len(sessions))
-    tft.text(font, marker, W // 2 - 24, H - NAV_H + 16, fg, bg)
-    tft.text(font, "<", 16, H - NAV_H + 16, accent if page > 0 else bg, bg)
-    tft.text(font, ">", W - 24, H - NAV_H + 16, accent if page < len(sessions) - 1 else bg, bg)
+    tft.text(font, marker, (W - len(marker) * 8) // 2, cy_txt, soft, bg)
+    tft.text(bigfont, "<", PAD_X, cy_big, accent if page > 0 else bg, bg)
+    tft.text(bigfont, ">", W - PAD_X - 16, cy_big, accent if page < len(sessions) - 1 else bg, bg)
 
 # --- Touch-Verarbeitung ---
 TAP_MAX_MOVE = 28
