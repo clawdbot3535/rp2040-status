@@ -293,6 +293,35 @@ The host-side tests cover `send.py`, `display_service.py`, `focus.py` and
   latch fine on this board; the native-firmware fallback in the design doc stayed
   unused.
 
+### Confirm from the display
+
+When an agent is waiting (`PERMISSION`/`INPUT`), you can answer it without
+switching to the terminal: **long-press** the session (~600 ms) to open a confirm
+screen with **APPROVE / REJECT / CONTINUE** (tap outside the buttons to cancel).
+The display sends `act <key> <action>` back; `display_service` looks up the
+session and `confirm.py` injects the configured keystrokes into the agent's
+terminal — tmux via `send-keys`, iTerm2 via `write text`. Single-tap (focus) and
+swipe (navigate) are unchanged; the confirm screen only opens for waiting agents.
+
+The keystrokes are configurable in `keymap.json` (repo root or
+`~/.config/rp2040-status/keymap.json`):
+
+```json
+{
+  "enabled": true,
+  "*": { "approve": ["y", "Enter"], "reject": ["n", "Enter"], "continue": ["Enter"] }
+}
+```
+
+- Resolution per action: `source` block → `"*"` block → built-in default.
+- Tokens are tmux key names; literals + a trailing `Enter` also work over iTerm2
+  (`write text`). Special keys (`Up`/`C-c`/…) are tmux-only in v1.
+- `"enabled": false` is a global kill-switch.
+
+The display daemon shells out to `tmux`, so its LaunchAgent sets `PATH` (to reach
+Homebrew `tmux`) and `WorkingDirectory` (to find `keymap.json`) — see
+`launchd/com.user.rp2040-display.plist`.
+
 ## Configuration
 
 Stale-session pruning can be toggled at runtime:
