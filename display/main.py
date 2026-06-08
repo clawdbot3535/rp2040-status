@@ -3,8 +3,8 @@
 import sys, select, time
 from machine import Pin, SPI
 import st7789py as st7789
-from lib import vga2_8x8 as font
-from lib.cst816 import CST816
+import vga2_8x8 as font
+from cst816 import CST816
 
 # --- Display (ST7789, 240x280, row-offset 20) ---
 spi = SPI(1, baudrate=40_000_000, sck=Pin(6), mosi=Pin(7))
@@ -37,9 +37,8 @@ _pending = None  # akkumulierter Frame waehrend LIST..END
 
 def read_serial_lines():
     global _inbuf
-    if not poll.poll(0):
-        return
-    _inbuf += sys.stdin.read(1)
+    while poll.poll(0):
+        _inbuf += sys.stdin.read(1)
     while "\n" in _inbuf:
         line, _inbuf = _inbuf.split("\n", 1)
         handle_line(line.strip())
