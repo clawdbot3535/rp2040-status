@@ -263,9 +263,10 @@ esptool --port $PORT --baud 460800 write-flash 0 ESP32_GENERIC_S3-SPIRAM_OCT-*.b
 mpremote connect $PORT fs cp display/boot.py :boot.py
 mpremote connect $PORT fs mkdir lib
 mpremote connect $PORT fs cp display/lib/st7789py.py :lib/st7789py.py
-mpremote connect $PORT fs cp display/lib/vga2_8x8.py :lib/vga2_8x8.py
-mpremote connect $PORT fs cp display/lib/vga2_16x16.py :lib/vga2_16x16.py
 mpremote connect $PORT fs cp display/lib/cst816.py :lib/cst816.py
+mpremote connect $PORT fs cp display/lib/provider_logos.py :lib/provider_logos.py
+mpremote connect $PORT fs cp display/lib/round24.py :lib/round24.py
+mpremote connect $PORT fs cp display/lib/round15.py :lib/round15.py
 mpremote connect $PORT fs cp display/main.py :main.py
 mpremote connect $PORT reset
 ```

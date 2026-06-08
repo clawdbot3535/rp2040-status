@@ -3,9 +3,13 @@
 import sys, select, time
 from machine import Pin, SPI
 import st7789py as st7789
-import vga2_8x8 as font
-import vga2_16x16 as bigfont
+import round24 as fbig          # proportionaler Headline-/Titel-Font (Arial Rounded Bold)
+import round15 as fsm           # proportionaler Meta-/Nav-Font
 from cst816 import CST816
+from provider_logos import OPENAI, CLAUDE, CLAUDE_DETAIL, PI
+
+LH = fsm.HEIGHT                 # Zeilenhoehe klein
+LH_BIG = fbig.HEIGHT            # Zeilenhoehe gross
 
 # --- Display (ST7789, 240x280, row-offset 20) ---
 # st7789py kennt 240x280 nicht ab Werk -> eigene Rotationstabelle.
@@ -31,6 +35,23 @@ NAV_H = 80
 PAD_X = 17
 BODY_TOP = BANNER_H + 18   # 77
 NAV_TOP = H - NAV_H        # 200
+BANNER_CY = BANNER_H // 2  # 29
+LOGO_SIZE = 48
+LOGO_CX = 36               # Provider-Logo links im Banner
+IND_CX = 207               # Status-Indikator rechts im Banner
+
+# Status -> (Headline, Akzent-Override). Override=None -> Provider-Akzent behalten.
+AMBER = st7789.color565(245, 158, 11)
+INDIGO = st7789.color565(99, 102, 241)
+_STATE = {
+    "WORKING":    ("WORKING", None),
+    "DONE":       ("DONE", None),
+    "PERMISSION": ("APPROVAL", AMBER),
+    "INPUT":      ("QUESTION", INDIGO),
+}
+
+_LOGOS = {"codex": OPENAI, "claude-code": CLAUDE, "claude": CLAUDE, "pi": PI}
+_LOGO_SZ = {"codex": 40}   # OpenAI-Marke fuellt ihr Feld staerker -> optisch kleiner rendern
 
 # Theme: (fg, bg, accent, soft) je Source. accent = Provider-Farbband oben.
 THEMES = {
@@ -79,68 +100,172 @@ def handle_line(line):
 
 _WRAP_SEPS = "-_./ "
 
-def wrap_text(text, max_chars, max_lines):
-    """Bricht text in <=max_lines Zeilen a max_chars um; bevorzugt Trenner
-    (-_./ ), sonst harter Umbruch. Mehrzeilig wie Buddys Title-Block."""
+def _char_w(fnt, ch):
+    try:
+        return fnt.WIDTHS[fnt.MAP.index(ch)]
+    except ValueError:
+        return fnt.MAX_WIDTH
+
+def wrap_px(text, max_px, max_lines, fnt):
+    """Bricht text in <=max_lines Zeilen, gemessen in Pixeln (proportionaler Font);
+    bevorzugt Trenner (-_./ ), sonst harter Umbruch."""
     out = []
     rest = text or ""
     while rest and len(out) < max_lines:
-        if len(rest) <= max_chars:
+        w = 0
+        cut = len(rest)
+        for i, ch in enumerate(rest):
+            w += _char_w(fnt, ch)
+            if w > max_px:
+                cut = i
+                break
+        if cut >= len(rest):
             out.append(rest)
             return out
-        cut = 0
-        for i in range(min(max_chars, len(rest) - 1), 0, -1):
-            if rest[i] in _WRAP_SEPS:
-                cut = i + 1
+        br = 0
+        for i in range(cut, 0, -1):
+            if rest[i - 1] in _WRAP_SEPS:
+                br = i
                 break
-        if cut <= 0:
-            cut = max_chars
-        out.append(rest[:cut])
-        rest = rest[cut:]
+        if br <= 0:
+            br = cut if cut > 0 else 1
+        out.append(rest[:br])
+        rest = rest[br:]
     return out
+
+def _disc(cx, cy, r, color):
+    # gefuellter Kreis als horizontale Spannen (eine fill_rect je Zeile) -> schnell.
+    for dy in range(-r, r + 1):
+        dx = int((r * r - dy * dy) ** 0.5)
+        tft.fill_rect(cx - dx, cy + dy, 2 * dx + 1, 1, color)
+
+_LOGO_CACHE = {}
+
+def _draw_logo(source, ink, band):
+    """Provider-Logo links im Banner via blit_buffer (eine SPI-Schreiboperation).
+    Logo-Bits -> ink, Hintergrund -> band; Claude-Detail erodiert zurueck auf band.
+    Komponierte Puffer werden je (source, ink, band) gecacht."""
+    bmp = _LOGOS.get(source)
+    if bmp is None:
+        _disc(LOGO_CX, BANNER_CY, 18, ink)
+        return
+    sz = _LOGO_SZ.get(source, 48)
+    x = LOGO_CX - sz // 2
+    y = BANNER_CY - sz // 2
+    ck = (source, ink, band)
+    buf = _LOGO_CACHE.get(ck)
+    if buf is None:
+        detail = CLAUDE_DETAIL if source in ("claude-code", "claude") else None
+        ih, il = ink >> 8, ink & 0xFF
+        bh, bl = band >> 8, band & 0xFF
+        buf = bytearray(sz * sz * 2)
+        o = 0
+        for row in range(sz):
+            rb = (row * 48 // sz) * 6
+            for col in range(sz):
+                sc = col * 48 // sz
+                m = 0x80 >> (sc & 7)
+                on = bmp[rb + (sc >> 3)] & m
+                if on and detail is not None and (detail[rb + (sc >> 3)] & m):
+                    on = 0
+                if on:
+                    buf[o] = ih; buf[o + 1] = il
+                else:
+                    buf[o] = bh; buf[o + 1] = bl
+                o += 2
+        _LOGO_CACHE[ck] = buf
+    tft.blit_buffer(buf, x, y, sz, sz)
+
+def _draw_indicator(status, cx, cy, ink, band):
+    """Status-Icon rechts im Banner (in ink-Farbe auf dem Band)."""
+    if status == "WORKING":
+        for i in range(3):
+            _disc(cx - 8 + i * 8, cy, 2, ink)
+    elif status == "DONE":
+        tft.line(cx - 8, cy + 1, cx - 3, cy + 6, ink)
+        tft.line(cx - 3, cy + 6, cx + 8, cy - 7, ink)
+        tft.line(cx - 8, cy + 2, cx - 3, cy + 7, ink)
+        tft.line(cx - 3, cy + 7, cx + 8, cy - 6, ink)
+    elif status == "PERMISSION":
+        tft.line(cx, cy - 8, cx + 9, cy, ink)
+        tft.line(cx + 9, cy, cx, cy + 8, ink)
+        tft.line(cx, cy + 8, cx - 9, cy, ink)
+        tft.line(cx - 9, cy, cx, cy - 8, ink)
+        tft.fill_rect(cx - 1, cy - 4, 3, 8, ink)
+    elif status == "INPUT":
+        tft.write(fbig, "?", cx - tft.write_width(fbig, "?") // 2, cy - LH_BIG // 2, ink, band)
+    else:
+        _disc(cx, cy, 3, ink)
+
+def _wcenter(fnt, s, y, fg, bg, floor_x=0):
+    x = max(floor_x, (W - tft.write_width(fnt, s)) // 2)
+    tft.write(fnt, s, x, y, fg, bg)
 
 def render():
     if not sessions:
         tft.fill(st7789.BLACK)
-        tft.text(font, "IDLE", W // 2 - 16, H // 2, st7789.color565(0, 200, 220), st7789.BLACK)
+        _wcenter(fbig, "IDLE", H // 2 - LH_BIG // 2, st7789.color565(0, 200, 220), st7789.BLACK)
         return
     s = sessions[page]
     fg, bg, accent, soft = theme_for(s["source"])
+    headline, override = _STATE.get(s["status"], (s["status"][:12], None))
+    band = override if override is not None else accent
     tft.fill(bg)
-    # Provider-Akzentband (hoch genug fuer die runden Ecken), Status darin.
-    tft.fill_rect(0, 0, W, BANNER_H, accent)
-    tft.text(bigfont, s["status"][:12], PAD_X, (BANNER_H - 16) // 2, bg, accent)
-    # Body: Projekt gross (mehrzeilig), Branch/Titel klein darunter.
+    # --- Banner: Logo | zentrierte Headline | Status-Indikator (alles in bg auf dem Band) ---
+    tft.fill_rect(0, 0, W, BANNER_H, band)
+    _draw_logo(s["source"], bg, band)
+    _wcenter(fbig, headline, (BANNER_H - LH_BIG) // 2, bg, band,
+             floor_x=LOGO_CX + LOGO_SIZE // 2 + 4)
+    _draw_indicator(s["status"], IND_CX, BANNER_CY, bg, band)
+    # --- Body: grosser Titel (sonst Projekt) + Meta-Zeile Projekt . Branch ---
+    title = s["title"] or s["project"]
     py = BODY_TOP
-    for ln in wrap_text(s["project"], 12, 2):
-        tft.text(bigfont, ln, PAD_X, py, fg, bg)
-        py += 20
-    py += 6
+    for ln in wrap_px(title, W - 2 * PAD_X, 2, fbig):
+        tft.write(fbig, ln, PAD_X, py, fg, bg)
+        py += LH_BIG + 2
+    meta_y = NAV_TOP - LH - 6
+    proj = s["project"]
+    tft.write(fsm, proj, PAD_X, meta_y, soft, bg)
     if s["branch"]:
-        tft.text(font, s["branch"][:24], PAD_X, py, soft, bg)
-        py += 16
-    if s["title"]:
-        tft.text(font, s["title"][:24], PAD_X, py, fg, bg)
-    # Nav-Strip unten: Chevrons + Zaehler, von der unteren Kante weggehalten.
-    cy_big = NAV_TOP + (NAV_H - 16) // 2
-    cy_txt = NAV_TOP + (NAV_H - 8) // 2
+        bx = PAD_X + tft.write_width(fsm, proj) + 6
+        _disc(bx + 3, meta_y + LH // 2, 1, soft)
+        tft.write(fsm, s["branch"], bx + 9, meta_y, soft, bg)
+    # --- Nav-Strip: Chevrons + Zaehler ---
+    cy_big = NAV_TOP + (NAV_H - LH_BIG) // 2
+    cy_txt = NAV_TOP + (NAV_H - LH) // 2
     marker = "%d / %d" % (page + 1, len(sessions))
-    tft.text(font, marker, (W - len(marker) * 8) // 2, cy_txt, soft, bg)
-    tft.text(bigfont, "<", PAD_X, cy_big, accent if page > 0 else bg, bg)
-    tft.text(bigfont, ">", W - PAD_X - 16, cy_big, accent if page < len(sessions) - 1 else bg, bg)
+    _wcenter(fsm, marker, cy_txt, soft, bg)
+    tft.write(fbig, "<", PAD_X, cy_big, accent if page > 0 else bg, bg)
+    tft.write(fbig, ">", W - PAD_X - tft.write_width(fbig, ">"), cy_big,
+              accent if page < len(sessions) - 1 else bg, bg)
 
 # --- Touch-Verarbeitung ---
 TAP_MAX_MOVE = 28
-SWIPE_MIN = 46
 TAP_DEBOUNCE_MS = 280   # ein Fingerdruck = eine Aktion (gegen Touch-Jitter)
+GESTURE_LEFT = 0x03     # CST816: Wisch nach links  -> naechste Session
+GESTURE_RIGHT = 0x04    # CST816: Wisch nach rechts -> vorige Session
 _touch_start = None  # (x, y, t)
 _last_xy = None
 _last_action_ms = -1000
 
+def _nav(delta, now):
+    global page, _last_action_ms
+    np = page + delta
+    if 0 <= np < len(sessions):
+        page = np
+        _last_action_ms = now
+        render()
+
 def handle_touch():
-    global _touch_start, _last_xy, page, _last_action_ms
+    global _touch_start, _last_xy, _last_action_ms
     touched, x, y, gesture = tp.read()
     now = time.ticks_ms()
+    deb = time.ticks_diff(now, _last_action_ms) >= TAP_DEBOUNCE_MS
+    # Hardware-Swipe-Geste des CST816 (ueberall am Schirm, kein Jitter-Problem)
+    if deb and gesture == GESTURE_LEFT:
+        _nav(1, now); _touch_start = None; _last_xy = None; return
+    if deb and gesture == GESTURE_RIGHT:
+        _nav(-1, now); _touch_start = None; _last_xy = None; return
     if touched:
         if _touch_start is None:
             _touch_start = (x, y, now)
@@ -154,21 +279,12 @@ def handle_touch():
     dx, dy = ex - sx, ey - sy
     _touch_start = None
     _last_xy = None
-    if time.ticks_diff(now, _last_action_ms) < TAP_DEBOUNCE_MS:
-        return  # zu kurz nach der letzten Aktion -> entprellen
-    in_nav = sy >= H - NAV_H
-    if in_nav and abs(dx) >= SWIPE_MIN and abs(dx) > abs(dy):
-        if dx < 0 and page < len(sessions) - 1:
-            page += 1; _last_action_ms = now; render()
-        elif dx > 0 and page > 0:
-            page -= 1; _last_action_ms = now; render()
+    if not deb:
         return
+    # Tap (kleine Bewegung): Nav-Strip -> Blaettern, sonst -> Session fokussieren
     if abs(dx) <= TAP_MAX_MOVE and abs(dy) <= TAP_MAX_MOVE:
-        if in_nav:
-            if ex < W // 2 and page > 0:
-                page -= 1; _last_action_ms = now; render()
-            elif ex >= W // 2 and page < len(sessions) - 1:
-                page += 1; _last_action_ms = now; render()
+        if sy >= H - NAV_H:
+            _nav(-1 if ex < W // 2 else 1, now)
         elif sessions:
             _last_action_ms = now
             sys.stdout.write("focus %s\n" % sessions[page]["key"])
