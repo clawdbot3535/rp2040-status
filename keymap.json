@@ -1,0 +1,4 @@
+{
+  "enabled": true,
+  "*": { "approve": ["y", "Enter"], "reject": ["n", "Enter"], "continue": ["Enter"] }
+}
