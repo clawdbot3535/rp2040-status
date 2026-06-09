@@ -1,20 +1,18 @@
-# display/main.py — MicroPython. Liest LIST-Frames ueber USB-Serial,
-# rendert die Session-Liste mit Source-Theme. (boot.py hat SYS_EN bereits gehalten.)
+# display/main.py — MicroPython. Liest LIST-Frames ueber USB-Serial und rendert
+# die aktuelle Session status-gefaerbt (Farbe = Status, wie die LED).
 import sys, select, time
 from machine import Pin, SPI
 import st7789py as st7789
-import round24 as fbig          # proportionaler Headline-/Titel-Font (Arial Rounded Bold)
-import round15 as fsm           # proportionaler Meta-/Nav-Font
+import round24 as fbig          # proportionaler grosser Font (Arial Rounded Bold)
+import round15 as fsm           # proportionaler kleiner Font
 from cst816 import CST816
 from provider_logos import OPENAI, CLAUDE, CLAUDE_DETAIL, PI
+import icons
 
-LH = fsm.HEIGHT                 # Zeilenhoehe klein
-LH_BIG = fbig.HEIGHT            # Zeilenhoehe gross
+LH = fsm.HEIGHT
+LH_BIG = fbig.HEIGHT
 
-# --- Display (ST7789, 240x280, row-offset 20) ---
-# st7789py kennt 240x280 nicht ab Werk -> eigene Rotationstabelle.
-# Format je Rotation: (madctl, width, height, xstart, ystart, needs_swap).
-# 280-Zeilen-Fenster sitzt mit ystart=20 im 240x320-Controller (am Board verifiziert).
+# --- Display (ST7789, 240x280, row-offset 20; eigene Rotationstabelle) ---
 _ROTATIONS = (
     (0x00, 240, 280, 0, 20, False),
     (0x60, 280, 240, 20, 0, False),
@@ -28,41 +26,45 @@ tft = st7789.ST7789(spi, 240, 280, reset=Pin(8, Pin.OUT), dc=Pin(4, Pin.OUT),
 tp = CST816()
 
 W, H = 240, 280
-# Layout an Buddy angelehnt: hohes Akzentband + Nav-Strip halten Inhalt von den
-# runden Display-Ecken weg; grosszuegiges horizontales Padding.
-BANNER_H = 59
-NAV_H = 80
-PAD_X = 17
-BODY_TOP = BANNER_H + 18   # 77
-NAV_TOP = H - NAV_H        # 200
-BANNER_CY = BANNER_H // 2  # 29
-LOGO_SIZE = 48
-LOGO_CX = 36               # Provider-Logo links im Banner
-IND_CX = 207               # Status-Indikator rechts im Banner
+PAD_X = 16
 
-# Status -> (Headline, Akzent-Override). Override=None -> Provider-Akzent behalten.
-AMBER = st7789.color565(245, 158, 11)
-INDIGO = st7789.color565(99, 102, 241)
-_STATE = {
-    "WORKING":    ("WORKING", None),
-    "DONE":       ("DONE", None),
-    "PERMISSION": ("APPROVAL", AMBER),
-    "INPUT":      ("QUESTION", INDIGO),
+# --- Farb-System: Status -> Hintergrund (aus Figma gesampelt) == LED-Systematik ---
+STATUS_BG = {
+    "WORKING":    st7789.color565(0x40, 0x88, 0xF8),   # blau
+    "INPUT":      st7789.color565(0xD0, 0x98, 0x20),   # gelb/gold
+    "DONE":       st7789.color565(0x30, 0xA0, 0x70),   # gruen
+    "PERMISSION": st7789.color565(0xF0, 0x48, 0x48),   # rot
+    "IDLE":       st7789.color565(0x60, 0x58, 0x70),   # slate-grau
 }
+FALLBACK_BG = STATUS_BG["IDLE"]
+
+# Token-Palette (Pillen/Badges/Text auf dem Farbhintergrund)
+INK     = st7789.color565(0x60, 0x58, 0x70)   # dunkle Pille / Kreis-Badge / Primaer-Button (== idle bg)
+ON_INK  = st7789.WHITE                        # Text/Icon auf INK
+CHIP    = st7789.color565(0xD8, 0xD8, 0xD8)   # heller "on master"-Chip / Sekundaer-Button
+SOFT    = st7789.WHITE                         # Pfad-Text auf Farbe
+INK_TXT = st7789.color565(0x28, 0x26, 0x30)   # dunkler Text auf hellem Chip/Button
+
+STATUS_LABEL = {"WORKING": "Working", "INPUT": "Input",
+                "DONE": "Done", "PERMISSION": "Permission"}
+
+def bg_for(status):
+    return STATUS_BG.get(status, FALLBACK_BG)
 
 _LOGOS = {"codex": OPENAI, "claude-code": CLAUDE, "claude": CLAUDE, "pi": PI}
-_LOGO_SZ = {"codex": 40}   # OpenAI-Marke fuellt ihr Feld staerker -> optisch kleiner rendern
 
-# Theme: (fg, bg, accent, soft) je Source. accent = Provider-Farbband oben.
-THEMES = {
-    "codex":       (st7789.color565(24, 28, 32),   st7789.color565(236, 240, 234), st7789.color565(16, 170, 95),  st7789.color565(120, 130, 130)),
-    "claude-code": (st7789.color565(40, 24, 16),   st7789.color565(236, 222, 202), st7789.color565(196, 92, 52),  st7789.color565(150, 122, 96)),
-    "antigravity": (st7789.color565(225, 228, 240), st7789.color565(18, 18, 28),   st7789.color565(96, 140, 255),  st7789.color565(140, 146, 165)),
-}
-DEFAULT_THEME = (st7789.WHITE, st7789.BLACK, st7789.color565(0, 200, 220), st7789.color565(120, 120, 120))
-
-def theme_for(source):
-    return THEMES.get(source, DEFAULT_THEME)
+# --- Layout ---
+HEADER_Y = 14
+HEADER_H = 34
+HLOGO = 22                 # Provider-Logo-Groesse in der Header-Pille
+PATH_Y = 80
+BADGE_CY = 150
+BADGE_R = 34
+DOTS_Y = 252
+# Permission-Buttons: (action, label, y, h, primary)
+PBTN = (("approve",  "Approve",  112, 42, True),
+        ("reject",   "Reject",   160, 30, False),
+        ("continue", "Continue", 194, 30, False))
 
 # --- Modell ---
 sessions = []   # Liste dicts: {key,status,source,project,branch,title}
@@ -71,7 +73,7 @@ page = 0
 poll = select.poll()
 poll.register(sys.stdin, select.POLLIN)
 _inbuf = ""
-_pending = None  # akkumulierter Frame waehrend LIST..END
+_pending = None
 
 def read_serial_lines():
     global _inbuf
@@ -90,8 +92,7 @@ def handle_line(line):
             sessions = _pending
             _pending = None
             page = min(page, max(0, len(sessions) - 1))
-            if _confirm_key is None:   # Overlay nicht ueberschreiben
-                render()
+            render()
     elif line.startswith("S ") and _pending is not None:
         parts = line[2:].split("|")
         while len(parts) < 6:
@@ -99,72 +100,42 @@ def handle_line(line):
         _pending.append({"key": parts[0], "status": parts[1], "source": parts[2],
                          "project": parts[3], "branch": parts[4], "title": parts[5]})
 
-_WRAP_SEPS = "-_./ "
-
-def _char_w(fnt, ch):
-    try:
-        return fnt.WIDTHS[fnt.MAP.index(ch)]
-    except ValueError:
-        return fnt.MAX_WIDTH
-
-def wrap_px(text, max_px, max_lines, fnt):
-    """Bricht text in <=max_lines Zeilen, gemessen in Pixeln (proportionaler Font);
-    bevorzugt Trenner (-_./ ), sonst harter Umbruch."""
-    out = []
-    rest = text or ""
-    while rest and len(out) < max_lines:
-        w = 0
-        cut = len(rest)
-        for i, ch in enumerate(rest):
-            w += _char_w(fnt, ch)
-            if w > max_px:
-                cut = i
-                break
-        if cut >= len(rest):
-            out.append(rest)
-            return out
-        br = 0
-        for i in range(cut, 0, -1):
-            if rest[i - 1] in _WRAP_SEPS:
-                br = i
-                break
-        if br <= 0:
-            br = cut if cut > 0 else 1
-        out.append(rest[:br])
-        rest = rest[br:]
-    return out
-
+# --- Zeichen-Primitive ---
 def _disc(cx, cy, r, color):
-    # gefuellter Kreis als horizontale Spannen (eine fill_rect je Zeile) -> schnell.
     for dy in range(-r, r + 1):
         dx = int((r * r - dy * dy) ** 0.5)
         tft.fill_rect(cx - dx, cy + dy, 2 * dx + 1, 1, color)
 
-_LOGO_CACHE = {}
+def _rrect(x, y, w, h, r, color):
+    """Abgerundetes Rechteck (Pille/Button/Chip)."""
+    if r > h // 2:
+        r = h // 2
+    tft.fill_rect(x + r, y, w - 2 * r, h, color)
+    tft.fill_rect(x, y + r, r, h - 2 * r, color)
+    tft.fill_rect(x + w - r, y + r, r, h - 2 * r, color)
+    _disc(x + r, y + r, r, color)
+    _disc(x + w - r - 1, y + r, r, color)
+    _disc(x + r, y + h - r - 1, r, color)
+    _disc(x + w - r - 1, y + h - r - 1, r, color)
 
-def _draw_logo(source, ink, band):
-    """Provider-Logo links im Banner via blit_buffer (eine SPI-Schreiboperation).
-    Logo-Bits -> ink, Hintergrund -> band; Claude-Detail erodiert zurueck auf band.
-    Komponierte Puffer werden je (source, ink, band) gecacht."""
-    bmp = _LOGOS.get(source)
-    if bmp is None:
-        _disc(LOGO_CX, BANNER_CY, 18, ink)
-        return
-    sz = _LOGO_SZ.get(source, 48)
-    x = LOGO_CX - sz // 2
-    y = BANNER_CY - sz // 2
-    ck = (source, ink, band)
-    buf = _LOGO_CACHE.get(ck)
+def _wcenter(fnt, s, y, fg, bg):
+    tft.write(fnt, s, max(0, (W - tft.write_width(fnt, s)) // 2), y, fg, bg)
+
+# 1-Bit-Bitmap (Logo/Icon) via blit_buffer, skaliert, eingefaerbt; gecacht.
+_BUF_CACHE = {}
+def _blit_1bit(bmp, detail, ink, band, x, y, size, src=48):
+    ck = (id(bmp), ink, band, size)
+    buf = _BUF_CACHE.get(ck)
     if buf is None:
-        detail = CLAUDE_DETAIL if source in ("claude-code", "claude") else None
+        srow = (src + 7) // 8
         ih, il = ink >> 8, ink & 0xFF
         bh, bl = band >> 8, band & 0xFF
-        buf = bytearray(sz * sz * 2)
+        buf = bytearray(size * size * 2)
         o = 0
-        for row in range(sz):
-            rb = (row * 48 // sz) * 6
-            for col in range(sz):
-                sc = col * 48 // sz
+        for row in range(size):
+            rb = (row * src // size) * srow
+            for col in range(size):
+                sc = col * src // size
                 m = 0x80 >> (sc & 7)
                 on = bmp[rb + (sc >> 3)] & m
                 if on and detail is not None and (detail[rb + (sc >> 3)] & m):
@@ -174,100 +145,115 @@ def _draw_logo(source, ink, band):
                 else:
                     buf[o] = bh; buf[o + 1] = bl
                 o += 2
-        _LOGO_CACHE[ck] = buf
-    tft.blit_buffer(buf, x, y, sz, sz)
+        _BUF_CACHE[ck] = buf
+    tft.blit_buffer(buf, x, y, size, size)
 
-def _draw_indicator(status, cx, cy, ink, band):
-    """Status-Icon rechts im Banner (in ink-Farbe auf dem Band)."""
-    if status == "WORKING":
-        for i in range(3):
-            _disc(cx - 8 + i * 8, cy, 2, ink)
-    elif status == "DONE":
-        tft.line(cx - 8, cy + 1, cx - 3, cy + 6, ink)
-        tft.line(cx - 3, cy + 6, cx + 8, cy - 7, ink)
-        tft.line(cx - 8, cy + 2, cx - 3, cy + 7, ink)
-        tft.line(cx - 3, cy + 7, cx + 8, cy - 6, ink)
-    elif status == "PERMISSION":
-        tft.line(cx, cy - 8, cx + 9, cy, ink)
-        tft.line(cx + 9, cy, cx, cy + 8, ink)
-        tft.line(cx, cy + 8, cx - 9, cy, ink)
-        tft.line(cx - 9, cy, cx, cy - 8, ink)
-        tft.fill_rect(cx - 1, cy - 4, 3, 8, ink)
-    elif status == "INPUT":
-        tft.write(fbig, "?", cx - tft.write_width(fbig, "?") // 2, cy - LH_BIG // 2, ink, band)
+# --- Gemeinsame Komponenten ---
+def draw_header(status, source):
+    label = STATUS_LABEL.get(status, status[:12])
+    lw = tft.write_width(fsm, label)
+    pw = 8 + HLOGO + 6 + lw + 12
+    px = (W - pw) // 2
+    _rrect(px, HEADER_Y, pw, HEADER_H, HEADER_H // 2, INK)
+    ly = HEADER_Y + (HEADER_H - HLOGO) // 2
+    bmp = _LOGOS.get(source)
+    if bmp is not None:
+        detail = CLAUDE_DETAIL if source in ("claude-code", "claude") else None
+        _blit_1bit(bmp, detail, ON_INK, INK, px + 8, ly, HLOGO)
     else:
-        _disc(cx, cy, 3, ink)
+        _disc(px + 8 + HLOGO // 2, HEADER_Y + HEADER_H // 2, HLOGO // 2 - 2, ON_INK)
+    tft.write(fsm, label, px + 8 + HLOGO + 6, HEADER_Y + (HEADER_H - LH) // 2, ON_INK, INK)
 
-def _wcenter(fnt, s, y, fg, bg, floor_x=0):
-    x = max(floor_x, (W - tft.write_width(fnt, s)) // 2)
-    tft.write(fnt, s, x, y, fg, bg)
+def draw_path(project, branch, bg):
+    p = "~/Dev/" + (project or "")
+    tft.write(fsm, p[:20], PAD_X, PATH_Y, SOFT, bg)
+    if branch:
+        cx = PAD_X + tft.write_width(fsm, p[:20]) + 8
+        bw = tft.write_width(fsm, branch[:14]) + 16
+        _rrect(cx, PATH_Y - 3, bw, LH + 6, 5, CHIP)
+        tft.write(fsm, branch[:14], cx + 8, PATH_Y, INK_TXT, CHIP)
+
+def draw_dots(n):
+    if n <= 1:
+        return
+    n = min(n, 6)
+    dot, act, gap, h = 8, 26, 12, 8
+    total = sum(act if i == page else dot for i in range(n)) + gap * (n - 1)
+    x = (W - total) // 2
+    inactive = st7789.color565(0xC8, 0xC8, 0xD0)
+    for i in range(n):
+        wdt = act if i == page else dot
+        _rrect(x, DOTS_Y, wdt, h, h // 2, ON_INK if i == page else inactive)
+        x += wdt + gap
+
+def draw_badge(icon, src, target=44):
+    cx, cy = W // 2, BADGE_CY
+    _disc(cx, cy, BADGE_R, INK)
+    _blit_1bit(icon, None, ON_INK, INK, cx - target // 2, cy - target // 2, target, src=src)
+
+# --- Per-Status-Renderer ---
+def _r_working(s, bg):
+    draw_header("WORKING", s["source"]); draw_path(s["project"], s["branch"], bg)
+    draw_badge(icons.REFRESH, icons.REFRESH_W); draw_dots(len(sessions))
+
+def _r_done(s, bg):
+    draw_header("DONE", s["source"]); draw_path(s["project"], s["branch"], bg)
+    draw_badge(icons.CHECK, icons.CHECK_W); draw_dots(len(sessions))
+
+def _r_input(s, bg):
+    draw_header("INPUT", s["source"])
+    _wcenter(fbig, ("~/Dev/" + (s["project"] or ""))[:14], 116, ON_INK, bg)
+    if s["branch"]:
+        bw = tft.write_width(fsm, s["branch"][:16]) + 16
+        _rrect((W - bw) // 2, 150, bw, LH + 8, 5, CHIP)
+        _wcenter(fsm, s["branch"][:16], 154, INK_TXT, CHIP)
+    draw_dots(len(sessions))
+
+def _r_permission(s, bg):
+    draw_header("PERMISSION", s["source"]); draw_path(s["project"], s["branch"], bg)
+    for action, label, y, h, primary in PBTN:
+        col = INK if primary else CHIP
+        txt = ON_INK if primary else INK_TXT
+        _rrect(PAD_X, y, W - 2 * PAD_X, h, 8, col)
+        _wcenter(fsm, label, y + (h - LH) // 2, txt, col)
+    draw_dots(len(sessions))
+
+def _r_idle():
+    bg = STATUS_BG["IDLE"]
+    tft.fill(bg)
+    pw = tft.write_width(fsm, "Idle") + 24
+    _rrect((W - pw) // 2, HEADER_Y, pw, HEADER_H, HEADER_H // 2, CHIP)
+    _wcenter(fsm, "Idle", HEADER_Y + (HEADER_H - LH) // 2, INK_TXT, CHIP)
+    t = 72
+    _blit_1bit(icons.BURST, None, ON_INK, bg, W // 2 - t // 2, BADGE_CY - t // 2, t, src=icons.BURST_W)
+
+RENDER = {"WORKING": _r_working, "DONE": _r_done,
+          "INPUT": _r_input, "PERMISSION": _r_permission}
 
 def render():
     if not sessions:
-        tft.fill(st7789.BLACK)
-        _wcenter(fbig, "IDLE", H // 2 - LH_BIG // 2, st7789.color565(0, 200, 220), st7789.BLACK)
+        _r_idle()
         return
     s = sessions[page]
-    fg, bg, accent, soft = theme_for(s["source"])
-    headline, override = _STATE.get(s["status"], (s["status"][:12], None))
-    band = override if override is not None else accent
+    status = s["status"]
+    bg = bg_for(status)
     tft.fill(bg)
-    # --- Banner: Logo | zentrierte Headline | Status-Indikator (alles in bg auf dem Band) ---
-    tft.fill_rect(0, 0, W, BANNER_H, band)
-    _draw_logo(s["source"], bg, band)
-    _wcenter(fbig, headline, (BANNER_H - LH_BIG) // 2, bg, band,
-             floor_x=LOGO_CX + LOGO_SIZE // 2 + 4)
-    _draw_indicator(s["status"], IND_CX, BANNER_CY, bg, band)
-    # --- Body: grosser Titel (sonst Projekt) + Meta-Zeile Projekt . Branch ---
-    title = s["title"] or s["project"]
-    py = BODY_TOP
-    for ln in wrap_px(title, W - 2 * PAD_X, 2, fbig):
-        tft.write(fbig, ln, PAD_X, py, fg, bg)
-        py += LH_BIG + 2
-    meta_y = NAV_TOP - LH - 6
-    proj = s["project"]
-    tft.write(fsm, proj, PAD_X, meta_y, soft, bg)
-    if s["branch"]:
-        bx = PAD_X + tft.write_width(fsm, proj) + 6
-        _disc(bx + 3, meta_y + LH // 2, 1, soft)
-        tft.write(fsm, s["branch"], bx + 9, meta_y, soft, bg)
-    # --- Nav-Strip: Chevrons + Zaehler ---
-    cy_big = NAV_TOP + (NAV_H - LH_BIG) // 2
-    cy_txt = NAV_TOP + (NAV_H - LH) // 2
-    marker = "%d / %d" % (page + 1, len(sessions))
-    _wcenter(fsm, marker, cy_txt, soft, bg)
-    tft.write(fbig, "<", PAD_X, cy_big, accent if page > 0 else bg, bg)
-    tft.write(fbig, ">", W - PAD_X - tft.write_width(fbig, ">"), cy_big,
-              accent if page < len(sessions) - 1 else bg, bg)
+    fn = RENDER.get(status)
+    if fn:
+        fn(s, bg)
+    else:                       # unbekannter Status -> Fallback
+        draw_header(status, s["source"])
+        draw_path(s["project"], s["branch"], bg)
+        draw_dots(len(sessions))
 
-# --- Touch-Verarbeitung ---
+# --- Touch ---
 TAP_MAX_MOVE = 28
-TAP_DEBOUNCE_MS = 280   # ein Fingerdruck = eine Aktion (gegen Touch-Jitter)
-LONGPRESS_MS = 600      # halten -> Confirm-Screen (nur bei wartenden Agenten)
-GESTURE_LEFT = 0x03     # CST816: Wisch nach links  -> naechste Session
-GESTURE_RIGHT = 0x04    # CST816: Wisch nach rechts -> vorige Session
-ACTIONABLE = ("PERMISSION", "INPUT")
-_BTN = (("approve", "APPROVE"), ("reject", "REJECT"), ("continue", "CONTINUE"))
-_BTN_Y = (95, 135, 175)   # y-Start der 3 Confirm-Buttons
-_BTN_H = 34
-_touch_start = None  # (x, y, t)
+TAP_DEBOUNCE_MS = 280
+GESTURE_LEFT = 0x03     # CST816: Wisch links  -> naechste Session
+GESTURE_RIGHT = 0x04    # CST816: Wisch rechts -> vorige Session
+_touch_start = None
 _last_xy = None
 _last_action_ms = -1000
-_confirm_key = None     # key der Session im Confirm-Modus, oder None
-_lp_fired = False       # Long-press in dieser Touch-Sequenz schon ausgeloest?
-_await_lift = False     # nach Long-press: erstes Loslassen ignorieren (Finger anheben)
-
-def render_confirm():
-    s = sessions[page]
-    fg, bg, accent, soft = theme_for(s["source"])
-    tft.fill(bg)
-    tft.fill_rect(0, 0, W, BANNER_H, accent)
-    _wcenter(fbig, "CONFIRM", (BANNER_H - LH_BIG) // 2, bg, accent)
-    tft.write(fsm, (s["project"] or s["source"])[:24], PAD_X, BANNER_H + 8, soft, bg)
-    for (action, label), y in zip(_BTN, _BTN_Y):
-        tft.fill_rect(PAD_X, y, W - 2 * PAD_X, _BTN_H, accent)
-        tft.write(fbig, label, PAD_X + 12, y + (_BTN_H - LH_BIG) // 2, bg, accent)
-    tft.write(fsm, "tap outside = cancel", PAD_X, H - LH - 6, soft, bg)
 
 def _nav(delta, now):
     global page, _last_action_ms
@@ -277,73 +263,20 @@ def _nav(delta, now):
         _last_action_ms = now
         render()
 
-def _send_act(action, now):
-    global _confirm_key, _last_action_ms
-    sys.stdout.write("act %s %s\n" % (_confirm_key, action))
-    _confirm_key = None
-    _last_action_ms = now
-    render()  # zurueck zur Session
-
 def handle_touch():
-    global _touch_start, _last_xy, _last_action_ms, _confirm_key, _lp_fired, _await_lift
+    global _touch_start, _last_xy, _last_action_ms
     touched, x, y, gesture = tp.read()
     now = time.ticks_ms()
     deb = time.ticks_diff(now, _last_action_ms) >= TAP_DEBOUNCE_MS
-
-    # --- Confirm-Modus: nur Taps auf Buttons / daneben ---
-    if _confirm_key is not None:
-        # Das Loslassen des Long-press selbst ignorieren (Finger nur anheben).
-        if _await_lift:
-            if not touched:
-                _await_lift = False
-                _touch_start = None
-                _last_xy = None
-            return
-        if touched:
-            if _touch_start is None:
-                _touch_start = (x, y, now)
-            _last_xy = (x, y)
-            return
-        if _touch_start is None or _last_xy is None:
-            _touch_start = None
-            return
-        ex, ey = _last_xy
-        _touch_start = None
-        _last_xy = None
-        if not deb:
-            return
-        for (action, _label), by in zip(_BTN, _BTN_Y):
-            if PAD_X <= ex <= W - PAD_X and by <= ey <= by + _BTN_H:
-                _send_act(action, now)
-                return
-        _confirm_key = None  # Tap daneben -> abbrechen
-        render()
-        return
-
-    # --- Hardware-Swipe ---
     if deb and gesture == GESTURE_LEFT:
-        _nav(1, now); _touch_start = None; _last_xy = None; _lp_fired = False; return
+        _nav(1, now); _touch_start = None; _last_xy = None; return
     if deb and gesture == GESTURE_RIGHT:
-        _nav(-1, now); _touch_start = None; _last_xy = None; _lp_fired = False; return
-
+        _nav(-1, now); _touch_start = None; _last_xy = None; return
     if touched:
         if _touch_start is None:
-            _touch_start = (x, y, now); _lp_fired = False
+            _touch_start = (x, y, now)
         _last_xy = (x, y)
-        # Long-press: gehalten, kaum Bewegung, Session wartet -> Confirm-Screen
-        sx, sy, st_ms = _touch_start
-        if (not _lp_fired and deb and sessions
-                and sessions[page]["status"] in ACTIONABLE
-                and time.ticks_diff(now, st_ms) >= LONGPRESS_MS
-                and abs(x - sx) <= TAP_MAX_MOVE and abs(y - sy) <= TAP_MAX_MOVE):
-            _lp_fired = True
-            _confirm_key = sessions[page]["key"]
-            _await_lift = True
-            _last_action_ms = now
-            render_confirm()
         return
-
-    # --- Release: Tap (wenn kein Long-press) ---
     if _touch_start is None or _last_xy is None:
         _touch_start = None
         return
@@ -352,18 +285,19 @@ def handle_touch():
     dx, dy = ex - sx, ey - sy
     _touch_start = None
     _last_xy = None
-    if _lp_fired:
-        _lp_fired = False
+    if not deb or abs(dx) > TAP_MAX_MOVE or abs(dy) > TAP_MAX_MOVE or not sessions:
         return
-    if not deb:
-        return
-    # Tap (kleine Bewegung): Nav-Strip -> Blaettern, sonst -> Session fokussieren
-    if abs(dx) <= TAP_MAX_MOVE and abs(dy) <= TAP_MAX_MOVE:
-        if sy >= H - NAV_H:
-            _nav(-1 if ex < W // 2 else 1, now)
-        elif sessions:
-            _last_action_ms = now
-            sys.stdout.write("focus %s\n" % sessions[page]["key"])
+    s = sessions[page]
+    # PERMISSION: Tap auf einen Button -> act
+    if s["status"] == "PERMISSION":
+        for action, _label, by, h, _p in PBTN:
+            if PAD_X <= ex <= W - PAD_X and by <= ey <= by + h:
+                _last_action_ms = now
+                sys.stdout.write("act %s %s\n" % (s["key"], action))
+                return
+    # sonst: Terminal fokussieren
+    _last_action_ms = now
+    sys.stdout.write("focus %s\n" % s["key"])
 
 # --- Main Loop ---
 sys.stdout.write("ready\n")
