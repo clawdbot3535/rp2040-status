@@ -1,6 +1,6 @@
 # display/main.py — MicroPython. Liest LIST-Frames ueber USB-Serial und rendert
 # die aktuelle Session status-gefaerbt (Farbe = Status, wie die LED).
-import sys, select, time
+import sys, select, time, math
 from machine import Pin, SPI
 import st7789py as st7789
 import round24 as fbig          # proportionaler grosser Font (Arial Rounded Bold)
@@ -21,9 +21,16 @@ _ROTATIONS = (
 )
 spi = SPI(1, baudrate=40_000_000, sck=Pin(6), mosi=Pin(7))
 tft = st7789.ST7789(spi, 240, 280, reset=Pin(8, Pin.OUT), dc=Pin(4, Pin.OUT),
-                    cs=Pin(5, Pin.OUT), backlight=Pin(15, Pin.OUT), rotation=0,
+                    cs=Pin(5, Pin.OUT), backlight=None, rotation=0,
                     custom_rotations=_ROTATIONS)
 tp = CST816()
+
+from machine import PWM
+bl = PWM(Pin(15), freq=20000)      # >20kHz -> kein hoerbares Fiepen
+BL_FULL = 65535
+def bl_set(frac):                  # frac 0.0..1.0 -> Helligkeit (Backlight-Atmen)
+    bl.duty_u16(int(max(0.0, min(1.0, frac)) * BL_FULL))
+bl_set(1.0)
 
 W, H = 240, 280
 PAD_X = 16
@@ -65,6 +72,15 @@ DOTS_Y = 252
 PBTN = (("approve",  "Approve",  112, 42, True),
         ("reject",   "Reject",   160, 30, False),
         ("continue", "Continue", 194, 30, False))
+
+# --- Animations-State ---
+ANIM_MS = 50            # ~20 fps
+PULSE_STATES = ("INPUT", "PERMISSION")
+DONE_POP_MS = 260
+_anim_phase = 0
+_anim_last = -1000
+_last_status = None
+_done_start = -10000
 
 # --- Modell ---
 sessions = []   # Liste dicts: {key,status,source,project,branch,title}
@@ -148,6 +164,32 @@ def _blit_1bit(bmp, detail, ink, band, x, y, size, src=48):
         _BUF_CACHE[ck] = buf
     tft.blit_buffer(buf, x, y, size, size)
 
+# 8-Bit-Coverage-Bitmap ink-ueber-bg geblendet (AA), skaliert, gecacht.
+_AA_CACHE = {}
+def _unpack565(c):
+    return ((c >> 11) & 0x1F) << 3, ((c >> 5) & 0x3F) << 2, (c & 0x1F) << 3
+
+def _blit_aa(cov, ink, bg, x, y, size, src, frame=0):
+    ck = (id(cov), ink, bg, size, frame)
+    buf = _AA_CACHE.get(ck)
+    if buf is None:
+        ir, ig, ib = _unpack565(ink)
+        br, bgc, bb = _unpack565(bg)
+        buf = bytearray(size * size * 2)
+        o = 0
+        for row in range(size):
+            sr = (row * src // size) * src
+            for col in range(size):
+                a = cov[sr + (col * src // size)]
+                r = (ir * a + br * (255 - a)) // 255
+                g = (ig * a + bgc * (255 - a)) // 255
+                b = (ib * a + bb * (255 - a)) // 255
+                c = st7789.color565(r, g, b)
+                buf[o] = c >> 8; buf[o + 1] = c & 0xFF
+                o += 2
+        _AA_CACHE[ck] = buf
+    tft.blit_buffer(buf, x, y, size, size)
+
 # --- Gemeinsame Komponenten ---
 def draw_header(status, source):
     label = STATUS_LABEL.get(status, status[:12])
@@ -186,19 +228,20 @@ def draw_dots(n):
         _rrect(x, DOTS_Y, wdt, h, h // 2, ON_INK if i == page else inactive)
         x += wdt + gap
 
-def draw_badge(icon, src, target=44):
+def draw_badge(cov, src, frame=0, target=44):
     cx, cy = W // 2, BADGE_CY
     _disc(cx, cy, BADGE_R, INK)
-    _blit_1bit(icon, None, ON_INK, INK, cx - target // 2, cy - target // 2, target, src=src)
+    _blit_aa(cov, ON_INK, INK, cx - target // 2, cy - target // 2, target, src, frame)
 
 # --- Per-Status-Renderer ---
 def _r_working(s, bg):
     draw_header("WORKING", s["source"]); draw_path(s["project"], s["branch"], bg)
-    draw_badge(icons.REFRESH, icons.REFRESH_W); draw_dots(len(sessions))
+    draw_badge(icons.REFRESH_FRAMES[_anim_phase % 12], icons.REFRESH_W, _anim_phase % 12)
+    draw_dots(len(sessions))
 
 def _r_done(s, bg):
     draw_header("DONE", s["source"]); draw_path(s["project"], s["branch"], bg)
-    draw_badge(icons.CHECK, icons.CHECK_W); draw_dots(len(sessions))
+    draw_badge(icons.CHECK, icons.CHECK_W, 0); draw_dots(len(sessions))
 
 def _r_input(s, bg):
     draw_header("INPUT", s["source"])
@@ -224,18 +267,30 @@ def _r_idle():
     pw = tft.write_width(fsm, "Idle") + 24
     _rrect((W - pw) // 2, HEADER_Y, pw, HEADER_H, HEADER_H // 2, CHIP)
     _wcenter(fsm, "Idle", HEADER_Y + (HEADER_H - LH) // 2, INK_TXT, CHIP)
-    t = 72
-    _blit_1bit(icons.BURST, None, ON_INK, bg, W // 2 - t // 2, BADGE_CY - t // 2, t, src=icons.BURST_W)
+    _blit_aa(icons.BURST_FRAMES[(_anim_phase // 3) % 12], ON_INK, bg,
+             W // 2 - 36, BADGE_CY - 36, 72, icons.BURST_W, (_anim_phase // 3) % 12)
 
 RENDER = {"WORKING": _r_working, "DONE": _r_done,
           "INPUT": _r_input, "PERMISSION": _r_permission}
 
+def _pulse_apply(status):
+    if status not in PULSE_STATES:
+        bl_set(1.0)
+
 def render():
+    global _last_status, _done_start, _anim_phase
     if not sessions:
-        _r_idle()
-        return
+        if _last_status != "IDLE":
+            _anim_phase = 0
+        _last_status = "IDLE"
+        _r_idle(); _pulse_apply("IDLE"); return
     s = sessions[page]
     status = s["status"]
+    if status != _last_status:
+        _anim_phase = 0
+        if status == "DONE":
+            _done_start = time.ticks_ms()
+        _last_status = status
     bg = bg_for(status)
     tft.fill(bg)
     fn = RENDER.get(status)
@@ -245,6 +300,52 @@ def render():
         draw_header(status, s["source"])
         draw_path(s["project"], s["branch"], bg)
         draw_dots(len(sessions))
+    _pulse_apply(status)
+
+# --- Animations-Ticks (zeichnen nur die animierte Region) ---
+def _tick_working():
+    f = _anim_phase % 12
+    cx, cy = W // 2, BADGE_CY
+    _blit_aa(icons.REFRESH_FRAMES[f], ON_INK, INK, cx - 22, cy - 22, 44, icons.REFRESH_W, f)
+
+def _tick_idle():
+    f = (_anim_phase // 3) % 12
+    _blit_aa(icons.BURST_FRAMES[f], ON_INK, STATUS_BG["IDLE"],
+             W // 2 - 36, BADGE_CY - 36, 72, icons.BURST_W, f)
+
+def _tick_done(now):
+    dt = time.ticks_diff(now, _done_start)
+    if dt > DONE_POP_MS:
+        return
+    k = 0.7 + 0.3 * (dt / DONE_POP_MS)
+    t = int(44 * k)
+    cx, cy = W // 2, BADGE_CY
+    tft.fill_rect(cx - 34, cy - 34, 68, 68, bg_for("DONE"))
+    _disc(cx, cy, int(BADGE_R * k), INK)
+    _blit_aa(icons.CHECK, ON_INK, INK, cx - t // 2, cy - t // 2, t, icons.CHECK_W, 0)
+
+PULSE_MIN = 0.45
+PULSE_MS = 1500
+def _tick_pulse(now):
+    ph = (time.ticks_ms() % PULSE_MS) / PULSE_MS
+    frac = PULSE_MIN + (1 - PULSE_MIN) * (0.5 - 0.5 * math.cos(ph * 2 * math.pi))
+    bl_set(frac)
+
+def animate(now):
+    global _anim_phase, _anim_last
+    if time.ticks_diff(now, _anim_last) < ANIM_MS:
+        return
+    _anim_last = now
+    _anim_phase += 1
+    if not sessions:
+        _tick_idle(); return
+    status = sessions[page]["status"]
+    if status == "WORKING":
+        _tick_working()
+    elif status == "DONE":
+        _tick_done(now)
+    elif status in PULSE_STATES:
+        _tick_pulse(now)
 
 # --- Touch ---
 TAP_MAX_MOVE = 28
@@ -305,4 +406,5 @@ render()
 while True:
     read_serial_lines()
     handle_touch()
+    animate(time.ticks_ms())
     time.sleep_ms(20)
