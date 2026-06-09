@@ -69,3 +69,20 @@ def test_resolve_focus_none_when_nothing(monkeypatch):
     monkeypatch.setattr(send, "_tmux_pane_for_self", lambda: None)
     monkeypatch.delenv("ITERM_SESSION_ID", raising=False)
     assert send.resolve_focus() is None
+
+def test_resolve_path_abbreviates_home(monkeypatch):
+    import send
+    monkeypatch.setenv("HOME", "/Users/me")
+    assert send.resolve_path("/Users/me/Projects/foo") == "~/Projects/foo"
+    assert send.resolve_path("/Users/me") == "~"
+    assert send.resolve_path("/etc/bar") == "/etc/bar"
+    assert send.resolve_path("") == ""
+
+def test_write_status_stores_and_preserves_path(tmp_path, monkeypatch):
+    import send; monkeypatch.setattr(send, "STATUS_DIR", str(tmp_path))
+    send.write_status("abc", "WORKING", "claude-code", project="foo",
+                      work_path="~/Projects/foo")
+    send.write_status("abc", "DONE", "claude-code")  # kein Pfad geliefert -> sticky
+    with open(os.path.join(str(tmp_path), "claude-code-abc")) as f:
+        rec = json.load(f)
+    assert rec["path"] == "~/Projects/foo"

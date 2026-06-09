@@ -100,6 +100,19 @@ def resolve_project(cwd: str) -> str:
     return os.path.basename(os.path.normpath(cwd)) if cwd else ""
 
 
+def resolve_path(cwd: str) -> str:
+    """Echter Arbeitspfad, mit $HOME -> ~ abgekuerzt (fuers Display)."""
+    if not cwd:
+        return ""
+    home = os.path.expanduser("~")
+    norm = os.path.normpath(cwd)
+    if norm == home:
+        return "~"
+    if home and norm.startswith(home + os.sep):
+        return "~" + norm[len(home):]
+    return norm
+
+
 def resolve_branch(cwd: str) -> str:
     if not cwd:
         return ""
@@ -195,9 +208,9 @@ def _atomic_write_json(path: str, record: dict) -> None:
 
 def write_status(session_id: str, status: str, source: str,
                  project: str = "", branch: Optional[str] = None, title: str = "",
-                 focus: Optional[dict] = None) -> None:
-    """Schreibt/merged Status-Datei. status/ts immer neu; project/branch/title/focus
-    werden beibehalten, wenn das neue Event sie nicht liefert."""
+                 focus: Optional[dict] = None, work_path: str = "") -> None:
+    """Schreibt/merged Status-Datei. status/ts immer neu; project/branch/title/path/
+    focus werden beibehalten, wenn das neue Event sie nicht liefert."""
     os.makedirs(STATUS_DIR, exist_ok=True)
     path = session_path(session_id, source)
 
@@ -221,6 +234,7 @@ def write_status(session_id: str, status: str, source: str,
         "project": pick(project, "project"),
         "branch": pick(branch, "branch"),
         "title": pick(title, "title"),
+        "path": pick(work_path, "path"),
         "focus": focus if focus else old.get("focus"),
     }
     _atomic_write_json(path, record)
@@ -315,12 +329,13 @@ def main() -> int:
     source = resolve_source(args.source, stdin_data)
     cwd = stdin_data.get("cwd") or os.environ.get("PWD", "")
     project = resolve_project(cwd)
+    work_path = resolve_path(cwd)
     branch = resolve_branch(cwd) if cmd == "WORKING" else None
     title = args.title or ""
     focus = resolve_focus()
 
     write_status(sid, cmd, source, project=project, branch=branch,
-                 title=title, focus=focus)
+                 title=title, focus=focus, work_path=work_path)
     return 0
 
 

@@ -90,3 +90,12 @@ def test_handle_incoming_act_malformed_noop(monkeypatch):
                         lambda rec, action: flag.__setitem__("called", True))
     assert ds.handle_incoming("act abc123", {"abc123": "/x"}) is False  # fehlende action
     assert flag["called"] is False
+
+def test_build_frame_includes_path_as_seventh_field(tmp_path):
+    _write(str(tmp_path), "claude-code-a", status="WORKING", ts=100,
+           source="claude-code", id="a", project="foo", branch="main",
+           title="", path="~/Projects/foo")
+    sessions = ds.read_sessions(str(tmp_path), stale_seconds=None, now=300)
+    frame, _ = ds.build_frame(sessions)
+    row = [l for l in frame.splitlines() if l.startswith("S ")][0]
+    assert row[2:].split("|")[6] == "~/Projects/foo"

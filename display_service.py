@@ -69,6 +69,7 @@ def build_frame(sessions: List[Tuple[str, dict]]) -> Tuple[str, dict]:
             _sanitize(rec.get("project", "")),
             _sanitize(rec.get("branch", "")),
             _sanitize(rec.get("title", "")),
+            _sanitize(rec.get("path", "")),
         ])
         lines.append(f"S {row}")
     lines.append("END")
