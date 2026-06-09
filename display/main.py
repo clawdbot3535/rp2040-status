@@ -177,13 +177,23 @@ def _blit_aa(cov, ink, bg, x, y, size, src, frame=0):
         br, bgc, bb = _unpack565(bg)
         buf = bytearray(size * size * 2)
         o = 0
+        sm1 = src - 1
+        scale = src / size
         for row in range(size):
-            sr = (row * src // size) * src
+            fy = row * scale
+            y0 = int(fy); y1 = y0 + 1 if y0 < sm1 else y0
+            ty = fy - y0
+            r0 = y0 * src; r1 = y1 * src
             for col in range(size):
-                a = cov[sr + (col * src // size)]
-                r = (ir * a + br * (255 - a)) // 255
-                g = (ig * a + bgc * (255 - a)) // 255
-                b = (ib * a + bb * (255 - a)) // 255
+                fx = col * scale
+                x0 = int(fx); x1 = x0 + 1 if x0 < sm1 else x0
+                tx = fx - x0
+                # bilineare Coverage -> glatte Kanten bei jeder Skalierung
+                a = (cov[r0 + x0] * (1 - tx) * (1 - ty) + cov[r0 + x1] * tx * (1 - ty)
+                     + cov[r1 + x0] * (1 - tx) * ty + cov[r1 + x1] * tx * ty)
+                r = int((ir * a + br * (255 - a)) / 255)
+                g = int((ig * a + bgc * (255 - a)) / 255)
+                b = int((ib * a + bb * (255 - a)) / 255)
                 c = st7789.color565(r, g, b)
                 buf[o] = c >> 8; buf[o + 1] = c & 0xFF
                 o += 2
@@ -304,7 +314,7 @@ def render():
 
 # --- Animations-Ticks (zeichnen nur die animierte Region) ---
 def _tick_working():
-    f = _anim_phase % 12
+    f = (_anim_phase // 2) % 12     # halbe Geschwindigkeit -> ruhiger
     cx, cy = W // 2, BADGE_CY
     _blit_aa(icons.REFRESH_FRAMES[f], ON_INK, INK, cx - 22, cy - 22, 44, icons.REFRESH_W, f)
 
