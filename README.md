@@ -220,10 +220,13 @@ python3 send.py OFF
 ## Touch display (ESP32-S3)
 
 An optional second device runs **alongside** the LED: a Waveshare
-ESP32-S3-Touch-LCD-1.69 (240×280 ST7789, CST816T touch). It shows the full list
-of sessions with provider-themed colours, and a tap brings the matching terminal
-to the front. The LED path (`broker.py`) is untouched — both devices are driven
-in parallel from the same status files.
+ESP32-S3-Touch-LCD-1.69 (240×280 ST7789, CST816T touch). It shows the current
+session **colour-coded by status — the same colour language as the LED**
+(WORKING blue, INPUT yellow, PERMISSION red, DONE green, IDLE grey); the provider
+is shown by a small logo in the header pill. A tap brings the matching terminal to
+the front; swipe pages through sessions (dots show the position). The LED path
+(`broker.py`) is untouched — both devices are driven in parallel from the same
+status files.
 
 ```
 send.py ──► /tmp/rp2040-status/<source>-<session>
@@ -295,13 +298,12 @@ The host-side tests cover `send.py`, `display_service.py`, `focus.py` and
 
 ### Confirm from the display
 
-When an agent is waiting (`PERMISSION`/`INPUT`), you can answer it without
-switching to the terminal: **long-press** the session (~600 ms) to open a confirm
-screen with **APPROVE / REJECT / CONTINUE** (tap outside the buttons to cancel).
-The display sends `act <key> <action>` back; `display_service` looks up the
-session and `confirm.py` injects the configured keystrokes into the agent's
-terminal — tmux via `send-keys`, iTerm2 via `write text`. Single-tap (focus) and
-swipe (navigate) are unchanged; the confirm screen only opens for waiting agents.
+When an agent needs approval (`PERMISSION`), the screen shows **Approve / Reject /
+Continue** buttons directly — tap one to answer without switching to the terminal.
+The display sends `act <key> <action>` back; `display_service` looks up the session
+and `confirm.py` injects the configured keystrokes into the agent's terminal — tmux
+via `send-keys`, iTerm2 via `write text`. A tap anywhere else (or on a non-permission
+screen) focuses the terminal instead; swipe pages through sessions.
 
 The keystrokes are configurable in `keymap.json` (repo root or
 `~/.config/rp2040-status/keymap.json`):
