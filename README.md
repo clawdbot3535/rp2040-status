@@ -228,10 +228,11 @@ is shown by a small logo in the header pill, and the real working path
 swipe pages through sessions (dots show the position). The LED path (`broker.py`)
 is untouched — both devices are driven in parallel from the same status files.
 
-The screen is animated: the WORKING icon spins, the idle burst rotates,
-INPUT/PERMISSION breathe (backlight PWM), DONE pops once on transition, and a path
-that's too long to fit scrolls as a flicker-free marquee (rendered to an off-screen
-buffer and blitted in one pass). Icons are anti-aliased (8-bit alpha, bilinear).
+The screen is animated: the WORKING icon spins, the idle screen cross-fades the
+three provider marks, INPUT/PERMISSION breathe (backlight PWM), DONE pops once on
+transition, and a path too long to fit scrolls as a flicker-free marquee — path and
+branch chip together — rendered to an off-screen buffer and blitted in one pass.
+Icons (and the idle logos) are anti-aliased (8-bit alpha, bilinear).
 
 ```
 send.py ──► /tmp/rp2040-status/<source>-<session>

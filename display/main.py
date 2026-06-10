@@ -147,20 +147,11 @@ MARQUEE_GAP = 26       # Luecke zwischen den Loop-Kopien
 def _pathstr(s):
     return s["path"] or s["project"] or ""
 
-# Marquee-Cache (eine aktive Laufschrift): periodischer Text-Puffer + Fenster-Puffer.
-_mq_key = None
-_mq_buf = None
-_mq_period = 0
-_mq_win = None
-
-def _render_text_buf(font, text, fg, bg):
-    """Rastert text einmal in einen RGB565-Puffer (Breite = Textbreite + GAP)."""
-    period = tft.write_width(font, text) + MARQUEE_GAP
-    h = font.HEIGHT
-    buf = bytearray(bytes((bg >> 8, bg & 0xFF)) * (period * h))
+def _buf_text(buf, period, font, text, bx, by, fg):
+    """Rastert Text (nur fg-Pixel) in einen vorgefuellten RGB565-Puffer an (bx, by)."""
     fh, fl = fg >> 8, fg & 0xFF
     OW = font.OFFSET_WIDTH
-    x = 0
+    x = bx
     for ch in text:
         try:
             ci = font.MAP.index(ch)
@@ -173,20 +164,78 @@ def _render_text_buf(font, text, fg, bg):
         if OW > 2:
             bs = (bs << 8) + font.OFFSETS[off + 2]
         cw = font.WIDTHS[ci]
-        for px in range(cw * h):
+        for px in range(cw * font.HEIGHT):
             if font.BITMAPS[bs >> 3] & (1 << (7 - (bs & 7))):
-                di = ((px // cw) * period + x + (px % cw)) * 2
+                di = (((by + px // cw) * period) + (x + px % cw)) * 2
                 buf[di] = fh; buf[di + 1] = fl
             bs += 1
         x += cw
-    return buf, period
 
-def _mq_blit(x, y, avail, h, off):
-    # Fenster [off, off+avail) (mit Wrap) im RAM zusammenkopieren -> ein blit_buffer.
+def _buf_rrect(buf, period, x, y, w, h, r, color):
+    """Abgerundetes Rechteck in den Puffer (mitscrollender Branch-Chip)."""
+    ch, cl = color >> 8, color & 0xFF
+    for ry in range(h):
+        for rx in range(w):
+            dx = dy = 0
+            if rx < r and ry < r:
+                dx, dy = r - 1 - rx, r - 1 - ry
+            elif rx >= w - r and ry < r:
+                dx, dy = rx - (w - r), r - 1 - ry
+            elif rx < r and ry >= h - r:
+                dx, dy = r - 1 - rx, ry - (h - r)
+            elif rx >= w - r and ry >= h - r:
+                dx, dy = rx - (w - r), ry - (h - r)
+            if dx * dx + dy * dy > r * r:
+                continue
+            di = ((y + ry) * period + (x + rx)) * 2
+            buf[di] = ch; buf[di + 1] = cl
+
+def _render_text_buf(font, text, fg, bg):
+    """Nur-Text-Laufzeile (z.B. grosser INPUT-Pfad)."""
+    period = tft.write_width(font, text) + MARQUEE_GAP
+    h = font.HEIGHT
+    buf = bytearray(bytes((bg >> 8, bg & 0xFF)) * (period * h))
+    _buf_text(buf, period, font, text, 0, 0, fg)
+    return buf, period, h
+
+def _render_pathline_buf(path, branch, bg):
+    """Pfad + mitscrollender Branch-Chip in einen Puffer (Hoehe = Chip-Hoehe)."""
+    h = LH + 6
+    ty = (h - fsm.HEIGHT) // 2
+    pw = tft.write_width(fsm, path)
+    chipw = (tft.write_width(fsm, branch[:14]) + 16) if branch else 0
+    content = pw + ((8 + chipw) if branch else 0)
+    period = content + MARQUEE_GAP
+    buf = bytearray(bytes((bg >> 8, bg & 0xFF)) * (period * h))
+    _buf_text(buf, period, fsm, path, 0, ty, SOFT)
+    if branch:
+        cx = pw + 8
+        _buf_rrect(buf, period, cx, 0, chipw, h, 5, CHIP)
+        _buf_text(buf, period, fsm, branch[:14], cx + 8, ty, INK_TXT)
+    return buf, period, h
+
+# Marquee-Cache (eine aktive Laufschrift): periodischer Puffer + Fenster.
+_mq_key = None
+_mq_buf = None
+_mq_period = 0
+_mq_h = 0
+_mq_win = None
+
+def _mq_ensure(key, builder, avail):
+    global _mq_key, _mq_buf, _mq_period, _mq_h, _mq_win
+    if key != _mq_key:
+        _mq_buf, _mq_period, _mq_h = builder()
+        _mq_win = bytearray(avail * _mq_h * 2)
+        _mq_key = key
+    elif _mq_win is None or len(_mq_win) != avail * _mq_h * 2:
+        _mq_win = bytearray(avail * _mq_h * 2)
+
+def _mq_blit(x, y, avail, off):
+    # Fenster [off, off+avail) mit Wrap im RAM bauen -> ein blit_buffer (flackerfrei).
     o = off % _mq_period
     stride = _mq_period * 2
     aw = avail * 2
-    for r in range(h):
+    for r in range(_mq_h):
         src = r * stride
         dst = r * aw
         first = (_mq_period - o) * 2
@@ -195,22 +244,7 @@ def _mq_blit(x, y, avail, h, off):
         else:
             _mq_win[dst:dst + first] = _mq_buf[src + o * 2:src + stride]
             _mq_win[dst + first:dst + aw] = _mq_buf[src:src + (aw - first)]
-    tft.blit_buffer(_mq_win, x, y, avail, h)
-
-def _marquee(font, text, x, y, avail, fg, bg, off):
-    """Statisch, wenn es passt; sonst flackerfreier Loop (Puffer-Fenster). True = laeuft."""
-    global _mq_key, _mq_buf, _mq_period, _mq_win
-    if tft.write_width(font, text) <= avail:
-        tft.fill_rect(x, y, avail, font.HEIGHT, bg)
-        tft.write(font, text, x, y, fg, bg)
-        return False
-    key = (text, id(font), fg, bg, avail)
-    if key != _mq_key:
-        _mq_buf, _mq_period = _render_text_buf(font, text, fg, bg)
-        _mq_win = bytearray(avail * font.HEIGHT * 2)
-        _mq_key = key
-    _mq_blit(x, y, avail, font.HEIGHT, off)
-    return True
+    tft.blit_buffer(_mq_win, x, y, avail, _mq_h)
 
 # 1-Bit-Bitmap (Logo/Icon) via blit_buffer, skaliert, eingefaerbt; gecacht.
 _BUF_CACHE = {}
@@ -291,22 +325,25 @@ def draw_header(status, source):
         _disc(px + 8 + HLOGO // 2, HEADER_Y + HEADER_H // 2, HLOGO // 2 - 2, ON_INK)
     tft.write(fsm, label, px + 8 + HLOGO + 6, HEADER_Y + (HEADER_H - LH) // 2, ON_INK, INK)
 
-def _path_avail(branch):
-    chipw = (tft.write_width(fsm, branch[:14]) + 16) if branch else 0
-    return W - 2 * PAD_X - (chipw + 8 if branch else 0), chipw
-
 def draw_path(path, branch, bg, off=0):
-    avail, chipw = _path_avail(branch)
-    over = _marquee(fsm, path, PAD_X, PATH_Y, avail, SOFT, bg, off)
-    if branch:
-        cx = W - PAD_X - chipw
-        _rrect(cx, PATH_Y - 3, chipw, LH + 6, 5, CHIP)
-        tft.write(fsm, branch[:14], cx + 8, PATH_Y, INK_TXT, CHIP)
-    return over
+    avail = W - 2 * PAD_X
+    pw = tft.write_width(fsm, path)
+    chipw = (tft.write_width(fsm, branch[:14]) + 16) if branch else 0
+    content = pw + ((8 + chipw) if branch else 0)
+    if content <= avail:                        # passt -> statisch (Pfad, Chip dahinter)
+        tft.fill_rect(PAD_X, PATH_Y - 3, avail, LH + 6, bg)
+        tft.write(fsm, path, PAD_X, PATH_Y, SOFT, bg)
+        if branch:
+            cx = PAD_X + pw + 8
+            _rrect(cx, PATH_Y - 3, chipw, LH + 6, 5, CHIP)
+            tft.write(fsm, branch[:14], cx + 8, PATH_Y, INK_TXT, CHIP)
+        return False
+    _mq_ensure(("P", path, branch, bg), lambda: _render_pathline_buf(path, branch, bg), avail)
+    _mq_blit(PAD_X, PATH_Y - 3, avail, off)      # Pfad + Branch-Chip scrollen zusammen
+    return True
 
 def _scroll_path(s, bg, off):
-    avail, _ = _path_avail(s["branch"])
-    return _marquee(fsm, _pathstr(s), PAD_X, PATH_Y, avail, SOFT, bg, off)
+    return draw_path(_pathstr(s), s["branch"], bg, off)
 
 def draw_dots(n):
     if n <= 1:
@@ -344,9 +381,12 @@ def _input_path(s, bg, off):
     p = _pathstr(s)
     avail = W - 2 * PAD_X
     if tft.write_width(fbig, p) <= avail:
+        tft.fill_rect(0, 116, W, fbig.HEIGHT, bg)
         _wcenter(fbig, p, 116, ON_INK, bg)
         return False
-    return _marquee(fbig, p, PAD_X, 116, avail, ON_INK, bg, off)
+    _mq_ensure(("I", p, bg), lambda: _render_text_buf(fbig, p, ON_INK, bg), avail)
+    _mq_blit(PAD_X, 116, avail, off)
+    return True
 
 def _r_input(s, bg):
     global _path_over
@@ -369,14 +409,64 @@ def _r_permission(s, bg):
         _wcenter(fsm, label, y + (h - LH) // 2, txt, col)
     draw_dots(len(sessions))
 
+# Idle: die drei Provider-Marken sanft nacheinander ein-/ausblenden.
+IDLE_LOGOS = (OPENAI, CLAUDE, PI)
+IDLE_SLOT_MS = 2800
+IDLE_FADE_MS = 750
+
+# 1-Bit-Logo -> 8-Bit-Coverage (Detail erodiert), damit _blit_aa bilinear glaettet.
+_LOGO_COV = {}
+def _logo_cov(bmp, detail, src=48):
+    cov = _LOGO_COV.get(id(bmp))
+    if cov is None:
+        srow = (src + 7) // 8
+        cov = bytearray(src * src)
+        for row in range(src):
+            rb = row * srow
+            for col in range(src):
+                m = 0x80 >> (col & 7)
+                on = bmp[rb + (col >> 3)] & m
+                if on and detail is not None and (detail[rb + (col >> 3)] & m):
+                    on = 0
+                cov[row * src + col] = 255 if on else 0
+        _LOGO_COV[id(bmp)] = cov
+    return cov
+
+def _blend565(c1, c2, a):
+    r1, g1, b1 = _unpack565(c1)
+    r2, g2, b2 = _unpack565(c2)
+    return st7789.color565(int(r1 * a + r2 * (1 - a)),
+                           int(g1 * a + g2 * (1 - a)),
+                           int(b1 * a + b2 * (1 - a)))
+
+def _idle_logo(now):
+    cyc = IDLE_SLOT_MS * len(IDLE_LOGOS)
+    t = now % cyc
+    idx = t // IDLE_SLOT_MS
+    w = t % IDLE_SLOT_MS
+    if w < IDLE_FADE_MS:
+        a = w / IDLE_FADE_MS
+    elif w > IDLE_SLOT_MS - IDLE_FADE_MS:
+        a = (IDLE_SLOT_MS - w) / IDLE_FADE_MS
+    else:
+        a = 1.0
+    return IDLE_LOGOS[idx], round(a * 6) / 6     # quantisiert -> Cache-freundlich
+
+def _draw_idle_logo(now):
+    bg = STATUS_BG["IDLE"]
+    bmp, a = _idle_logo(now)
+    ink = _blend565(ON_INK, bg, a)
+    detail = CLAUDE_DETAIL if bmp is CLAUDE else None
+    _blit_aa(_logo_cov(bmp, detail), ink, bg, W // 2 - 32, BADGE_CY - 32, 64, 48,
+             frame=int(a * 6))
+
 def _r_idle():
     bg = STATUS_BG["IDLE"]
     tft.fill(bg)
     pw = tft.write_width(fsm, "Idle") + 24
     _rrect((W - pw) // 2, HEADER_Y, pw, HEADER_H, HEADER_H // 2, CHIP)
     _wcenter(fsm, "Idle", HEADER_Y + (HEADER_H - LH) // 2, INK_TXT, CHIP)
-    _blit_aa(icons.BURST_FRAMES[(_anim_phase // 3) % 12], ON_INK, bg,
-             W // 2 - 36, BADGE_CY - 36, 72, icons.BURST_W, (_anim_phase // 3) % 12)
+    _draw_idle_logo(time.ticks_ms())
 
 RENDER = {"WORKING": _r_working, "DONE": _r_done,
           "INPUT": _r_input, "PERMISSION": _r_permission}
@@ -418,9 +508,7 @@ def _tick_working():
     _blit_aa(icons.REFRESH_FRAMES[f], ON_INK, INK, cx - 22, cy - 22, 44, icons.REFRESH_W, f)
 
 def _tick_idle():
-    f = (_anim_phase // 3) % 12
-    _blit_aa(icons.BURST_FRAMES[f], ON_INK, STATUS_BG["IDLE"],
-             W // 2 - 36, BADGE_CY - 36, 72, icons.BURST_W, f)
+    _draw_idle_logo(time.ticks_ms())
 
 def _tick_done(now):
     dt = time.ticks_diff(now, _done_start)
