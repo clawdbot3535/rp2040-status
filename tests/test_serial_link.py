@@ -2,7 +2,8 @@
 import serial_link
 
 class _Port:
-    def __init__(self, vid, device): self.vid = vid; self.device = device
+    def __init__(self, vid, device, pid=None):
+        self.vid = vid; self.device = device; self.pid = pid
 
 def test_find_device_matches_vid(monkeypatch):
     ports = [_Port(0x2E8A, "/dev/cu.led"), _Port(0x303A, "/dev/cu.display")]
@@ -13,6 +14,26 @@ def test_find_device_matches_vid(monkeypatch):
 def test_find_device_none_when_absent(monkeypatch):
     monkeypatch.setattr(serial_link, "_list_ports", lambda: [_Port(0x2E8A, "/dev/cu.led")])
     assert serial_link.find_device(0x303A) is None
+
+def test_find_device_pid_filter_skips_other_device_with_same_vid(monkeypatch):
+    # Reboot-Szenario: zwei Espressif-Geraete, JTAG-Debug-Unit sortiert vor dem
+    # Touch-LCD. Ohne PID-Filter griffe find_device das falsche Geraet.
+    ports = [
+        _Port(0x303A, "/dev/cu.usbmodem1133301", pid=0x1001),   # fremdes Board (JTAG)
+        _Port(0x303A, "/dev/cu.usbmodem11334201", pid=0x4001),  # Touch-LCD (CDC)
+    ]
+    monkeypatch.setattr(serial_link, "_list_ports", lambda: ports)
+    assert serial_link.find_device(0x303A, pid=0x4001) == "/dev/cu.usbmodem11334201"
+
+def test_find_device_pid_filter_none_when_pid_absent(monkeypatch):
+    ports = [_Port(0x303A, "/dev/cu.usbmodem1133301", pid=0x1001)]
+    monkeypatch.setattr(serial_link, "_list_ports", lambda: ports)
+    assert serial_link.find_device(0x303A, pid=0x4001) is None
+
+def test_find_device_without_pid_keeps_old_behavior(monkeypatch):
+    ports = [_Port(0x303A, "/dev/cu.b", pid=0x4001), _Port(0x303A, "/dev/cu.a", pid=0x1001)]
+    monkeypatch.setattr(serial_link, "_list_ports", lambda: ports)
+    assert serial_link.find_device(0x303A) == "/dev/cu.a"
 
 
 class _FakeConn:

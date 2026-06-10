@@ -13,9 +13,18 @@ def _list_ports():
     return list(list_ports.comports())
 
 
-def find_device(vid: int):
-    """Erstes Geraet mit passender USB-Vendor-ID, oder None."""
-    matches = sorted(p.device for p in _list_ports() if getattr(p, "vid", None) == vid)
+def find_device(vid: int, pid: int = None):
+    """Erstes Geraet mit passender USB-Vendor-ID (und optional Product-ID), oder None.
+
+    Der PID-Filter ist noetig, sobald mehrere Boards desselben Herstellers
+    stecken: ein ESP32-S3 im JTAG-Modus (PID 0x1001) hat dieselbe VID wie
+    einer im OTG/CDC-Modus (PID 0x4001)."""
+    matches = sorted(
+        p.device
+        for p in _list_ports()
+        if getattr(p, "vid", None) == vid
+        and (pid is None or getattr(p, "pid", None) == pid)
+    )
     return matches[0] if matches else None
 
 

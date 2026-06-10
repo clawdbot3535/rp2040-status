@@ -18,6 +18,7 @@ CONFIG_FILE = os.path.join(STATUS_DIR, ".config")
 POLL_MS = 200
 DEFAULT_STALE_SECONDS = 600
 ESP32S3_VID = 0x303A  # Espressif — Touch-LCD
+ESP32S3_PID_CDC = 0x4001  # OTG/TinyUSB-CDC; JTAG-Debug-Unit (0x1001) waere ein fremdes Board
 
 
 def derive_key(path: str) -> str:
@@ -161,7 +162,7 @@ def main() -> None:
             now = time.time()
 
             if not link.is_open() and now - last_device_check > 5:
-                device = find_device(ESP32S3_VID)
+                device = find_device(ESP32S3_VID, pid=ESP32S3_PID_CDC)
                 if device:
                     try:
                         link.open(device)
