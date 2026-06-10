@@ -65,7 +65,7 @@ HEADER_Y = 14
 HEADER_H = 34
 HLOGO = 22                 # Provider-Logo-Groesse in der Header-Pille
 PATH_Y = 80
-BADGE_CY = 150
+BADGE_CY = 162
 BADGE_R = 34
 DOTS_Y = 252
 # Permission-Buttons: (action, label, y, h, primary)
@@ -522,7 +522,7 @@ def _tick_done(now):
     _blit_aa(icons.CHECK, ON_INK, INK, cx - t // 2, cy - t // 2, t, icons.CHECK_W, 0)
 
 PULSE_MIN = 0.45
-PULSE_MS = 1500
+PULSE_MS = 2800
 def _tick_pulse(now):
     ph = (time.ticks_ms() % PULSE_MS) / PULSE_MS
     frac = PULSE_MIN + (1 - PULSE_MIN) * (0.5 - 0.5 * math.cos(ph * 2 * math.pi))
