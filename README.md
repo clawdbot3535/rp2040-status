@@ -121,6 +121,10 @@ A complete wiring in `~/.claude/settings.json` looks like this:
       { "hooks": [ { "type": "command",
         "command": "python3 /path/to/send.py WORKING", "timeout": 3 } ] }
     ],
+    "PostToolUse": [
+      { "hooks": [ { "type": "command",
+        "command": "python3 /path/to/send.py WORKING", "timeout": 3 } ] }
+    ],
     "Stop": [
       { "hooks": [ { "type": "command",
         "command": "python3 /path/to/send.py INPUT", "timeout": 3 } ] }
@@ -132,6 +136,16 @@ A complete wiring in `~/.claude/settings.json` looks like this:
   }
 }
 ```
+
+> **Why `PostToolUse → WORKING` matters.** `PreToolUse` fires *before* the
+> permission gate, so the order is `PreToolUse`(WORKING) → `PermissionRequest`
+> (PERMISSION) → grant → tool runs. Without `PostToolUse`, nothing writes a
+> status when the permission is resolved, so the session stays **PERMISSION**
+> (red) until the next tool call or turn end. `PostToolUse → WORKING` lets the
+> agent flip back to WORKING right after the granted tool runs. (A touch
+> confirm also bumps the session to WORKING immediately — see
+> [Confirm from the display](#confirm-from-the-display) — but a confirmation
+> typed in the terminal relies on this hook.)
 
 > **Don't use `--all` on `PreToolUse`.** Each hook invocation already
 > carries the current session's `session_id` on stdin, so `send.py` updates
