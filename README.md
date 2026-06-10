@@ -234,6 +234,22 @@ transition, and a path too long to fit scrolls as a flicker-free marquee — pat
 branch chip together — rendered to an off-screen buffer and blitted in one pass.
 Icons (and the idle logos) are anti-aliased (8-bit alpha, bilinear).
 
+### Screens
+
+![Idle · Working · Input · Done · Permission](docs/screens/states.png)
+
+*The colour encodes the status (blue/yellow/red/green/grey); the header logo shows
+the provider.*
+
+| Working spinner | Marquee (long path) | Idle cross-fade | Permission pulse |
+|:---:|:---:|:---:|:---:|
+| ![](docs/screens/anim-working.gif) | ![](docs/screens/anim-marquee.gif) | ![](docs/screens/anim-idle.gif) | ![](docs/screens/anim-permission.gif) |
+
+<sub>Rendered by [`tools/sim_display.py`](tools/sim_display.py) — a host simulator
+that reproduces the firmware rendering from the device's own fonts, icons, logos,
+and colours (no hardware needed). Regenerate after layout changes:
+`python tools/sim_display.py`.</sub>
+
 ```
 send.py ──► /tmp/rp2040-status/<source>-<session>
                      │  (one file per session, enriched: project/branch/title/focus)
