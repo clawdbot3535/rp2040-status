@@ -81,6 +81,8 @@ _anim_phase = 0
 _anim_last = -1000
 _last_status = None
 _done_start = -10000
+_marquee_off = 0
+_path_over = False
 
 # --- Modell ---
 sessions = []   # Liste dicts: {key,status,source,project,branch,title}
@@ -111,10 +113,11 @@ def handle_line(line):
             render()
     elif line.startswith("S ") and _pending is not None:
         parts = line[2:].split("|")
-        while len(parts) < 6:
+        while len(parts) < 7:
             parts.append("")
         _pending.append({"key": parts[0], "status": parts[1], "source": parts[2],
-                         "project": parts[3], "branch": parts[4], "title": parts[5]})
+                         "project": parts[3], "branch": parts[4], "title": parts[5],
+                         "path": parts[6]})
 
 # --- Zeichen-Primitive ---
 def _disc(cx, cy, r, color):
@@ -136,6 +139,78 @@ def _rrect(x, y, w, h, r, color):
 
 def _wcenter(fnt, s, y, fg, bg):
     tft.write(fnt, s, max(0, (W - tft.write_width(fnt, s)) // 2), y, fg, bg)
+
+# --- Laufschrift (Pfad-Overflow) ---
+MARQUEE_SPEED = 2      # px / Tick
+MARQUEE_GAP = 26       # Luecke zwischen den Loop-Kopien
+
+def _pathstr(s):
+    return s["path"] or s["project"] or ""
+
+# Marquee-Cache (eine aktive Laufschrift): periodischer Text-Puffer + Fenster-Puffer.
+_mq_key = None
+_mq_buf = None
+_mq_period = 0
+_mq_win = None
+
+def _render_text_buf(font, text, fg, bg):
+    """Rastert text einmal in einen RGB565-Puffer (Breite = Textbreite + GAP)."""
+    period = tft.write_width(font, text) + MARQUEE_GAP
+    h = font.HEIGHT
+    buf = bytearray(bytes((bg >> 8, bg & 0xFF)) * (period * h))
+    fh, fl = fg >> 8, fg & 0xFF
+    OW = font.OFFSET_WIDTH
+    x = 0
+    for ch in text:
+        try:
+            ci = font.MAP.index(ch)
+        except ValueError:
+            continue
+        off = ci * OW
+        bs = font.OFFSETS[off]
+        if OW > 1:
+            bs = (bs << 8) + font.OFFSETS[off + 1]
+        if OW > 2:
+            bs = (bs << 8) + font.OFFSETS[off + 2]
+        cw = font.WIDTHS[ci]
+        for px in range(cw * h):
+            if font.BITMAPS[bs >> 3] & (1 << (7 - (bs & 7))):
+                di = ((px // cw) * period + x + (px % cw)) * 2
+                buf[di] = fh; buf[di + 1] = fl
+            bs += 1
+        x += cw
+    return buf, period
+
+def _mq_blit(x, y, avail, h, off):
+    # Fenster [off, off+avail) (mit Wrap) im RAM zusammenkopieren -> ein blit_buffer.
+    o = off % _mq_period
+    stride = _mq_period * 2
+    aw = avail * 2
+    for r in range(h):
+        src = r * stride
+        dst = r * aw
+        first = (_mq_period - o) * 2
+        if first >= aw:
+            _mq_win[dst:dst + aw] = _mq_buf[src + o * 2:src + o * 2 + aw]
+        else:
+            _mq_win[dst:dst + first] = _mq_buf[src + o * 2:src + stride]
+            _mq_win[dst + first:dst + aw] = _mq_buf[src:src + (aw - first)]
+    tft.blit_buffer(_mq_win, x, y, avail, h)
+
+def _marquee(font, text, x, y, avail, fg, bg, off):
+    """Statisch, wenn es passt; sonst flackerfreier Loop (Puffer-Fenster). True = laeuft."""
+    global _mq_key, _mq_buf, _mq_period, _mq_win
+    if tft.write_width(font, text) <= avail:
+        tft.fill_rect(x, y, avail, font.HEIGHT, bg)
+        tft.write(font, text, x, y, fg, bg)
+        return False
+    key = (text, id(font), fg, bg, avail)
+    if key != _mq_key:
+        _mq_buf, _mq_period = _render_text_buf(font, text, fg, bg)
+        _mq_win = bytearray(avail * font.HEIGHT * 2)
+        _mq_key = key
+    _mq_blit(x, y, avail, font.HEIGHT, off)
+    return True
 
 # 1-Bit-Bitmap (Logo/Icon) via blit_buffer, skaliert, eingefaerbt; gecacht.
 _BUF_CACHE = {}
@@ -216,14 +291,22 @@ def draw_header(status, source):
         _disc(px + 8 + HLOGO // 2, HEADER_Y + HEADER_H // 2, HLOGO // 2 - 2, ON_INK)
     tft.write(fsm, label, px + 8 + HLOGO + 6, HEADER_Y + (HEADER_H - LH) // 2, ON_INK, INK)
 
-def draw_path(project, branch, bg):
-    p = "~/Dev/" + (project or "")
-    tft.write(fsm, p[:20], PAD_X, PATH_Y, SOFT, bg)
+def _path_avail(branch):
+    chipw = (tft.write_width(fsm, branch[:14]) + 16) if branch else 0
+    return W - 2 * PAD_X - (chipw + 8 if branch else 0), chipw
+
+def draw_path(path, branch, bg, off=0):
+    avail, chipw = _path_avail(branch)
+    over = _marquee(fsm, path, PAD_X, PATH_Y, avail, SOFT, bg, off)
     if branch:
-        cx = PAD_X + tft.write_width(fsm, p[:20]) + 8
-        bw = tft.write_width(fsm, branch[:14]) + 16
-        _rrect(cx, PATH_Y - 3, bw, LH + 6, 5, CHIP)
+        cx = W - PAD_X - chipw
+        _rrect(cx, PATH_Y - 3, chipw, LH + 6, 5, CHIP)
         tft.write(fsm, branch[:14], cx + 8, PATH_Y, INK_TXT, CHIP)
+    return over
+
+def _scroll_path(s, bg, off):
+    avail, _ = _path_avail(s["branch"])
+    return _marquee(fsm, _pathstr(s), PAD_X, PATH_Y, avail, SOFT, bg, off)
 
 def draw_dots(n):
     if n <= 1:
@@ -245,17 +328,30 @@ def draw_badge(cov, src, frame=0, target=44):
 
 # --- Per-Status-Renderer ---
 def _r_working(s, bg):
-    draw_header("WORKING", s["source"]); draw_path(s["project"], s["branch"], bg)
+    global _path_over
+    draw_header("WORKING", s["source"])
+    _path_over = draw_path(_pathstr(s), s["branch"], bg, _marquee_off)
     draw_badge(icons.REFRESH_FRAMES[_anim_phase % 12], icons.REFRESH_W, _anim_phase % 12)
     draw_dots(len(sessions))
 
 def _r_done(s, bg):
-    draw_header("DONE", s["source"]); draw_path(s["project"], s["branch"], bg)
+    global _path_over
+    draw_header("DONE", s["source"])
+    _path_over = draw_path(_pathstr(s), s["branch"], bg, _marquee_off)
     draw_badge(icons.CHECK, icons.CHECK_W, 0); draw_dots(len(sessions))
 
+def _input_path(s, bg, off):
+    p = _pathstr(s)
+    avail = W - 2 * PAD_X
+    if tft.write_width(fbig, p) <= avail:
+        _wcenter(fbig, p, 116, ON_INK, bg)
+        return False
+    return _marquee(fbig, p, PAD_X, 116, avail, ON_INK, bg, off)
+
 def _r_input(s, bg):
+    global _path_over
     draw_header("INPUT", s["source"])
-    _wcenter(fbig, ("~/Dev/" + (s["project"] or ""))[:14], 116, ON_INK, bg)
+    _path_over = _input_path(s, bg, _marquee_off)
     if s["branch"]:
         bw = tft.write_width(fsm, s["branch"][:16]) + 16
         _rrect((W - bw) // 2, 150, bw, LH + 8, 5, CHIP)
@@ -263,7 +359,9 @@ def _r_input(s, bg):
     draw_dots(len(sessions))
 
 def _r_permission(s, bg):
-    draw_header("PERMISSION", s["source"]); draw_path(s["project"], s["branch"], bg)
+    global _path_over
+    draw_header("PERMISSION", s["source"])
+    _path_over = draw_path(_pathstr(s), s["branch"], bg, _marquee_off)
     for action, label, y, h, primary in PBTN:
         col = INK if primary else CHIP
         txt = ON_INK if primary else INK_TXT
@@ -288,16 +386,17 @@ def _pulse_apply(status):
         bl_set(1.0)
 
 def render():
-    global _last_status, _done_start, _anim_phase
+    global _last_status, _done_start, _anim_phase, _marquee_off, _path_over
     if not sessions:
         if _last_status != "IDLE":
             _anim_phase = 0
-        _last_status = "IDLE"
+        _last_status = "IDLE"; _path_over = False
         _r_idle(); _pulse_apply("IDLE"); return
     s = sessions[page]
     status = s["status"]
     if status != _last_status:
         _anim_phase = 0
+        _marquee_off = 0
         if status == "DONE":
             _done_start = time.ticks_ms()
         _last_status = status
@@ -308,7 +407,7 @@ def render():
         fn(s, bg)
     else:                       # unbekannter Status -> Fallback
         draw_header(status, s["source"])
-        draw_path(s["project"], s["branch"], bg)
+        _path_over = draw_path(_pathstr(s), s["branch"], bg, _marquee_off)
         draw_dots(len(sessions))
     _pulse_apply(status)
 
@@ -342,20 +441,29 @@ def _tick_pulse(now):
     bl_set(frac)
 
 def animate(now):
-    global _anim_phase, _anim_last
+    global _anim_phase, _anim_last, _marquee_off
     if time.ticks_diff(now, _anim_last) < ANIM_MS:
         return
     _anim_last = now
     _anim_phase += 1
     if not sessions:
         _tick_idle(); return
-    status = sessions[page]["status"]
+    s = sessions[page]
+    status = s["status"]
     if status == "WORKING":
         _tick_working()
     elif status == "DONE":
         _tick_done(now)
     elif status in PULSE_STATES:
         _tick_pulse(now)
+    # Pfad-Laufschrift (nur wenn er ueberlaeuft)
+    if _path_over:
+        bg = bg_for(status)
+        _marquee_off += MARQUEE_SPEED
+        if status == "INPUT":
+            _input_path(s, bg, _marquee_off)
+        else:
+            _scroll_path(s, bg, _marquee_off)
 
 # --- Touch ---
 TAP_MAX_MOVE = 28
@@ -367,10 +475,11 @@ _last_xy = None
 _last_action_ms = -1000
 
 def _nav(delta, now):
-    global page, _last_action_ms
+    global page, _last_action_ms, _marquee_off
     np = page + delta
     if 0 <= np < len(sessions):
         page = np
+        _marquee_off = 0
         _last_action_ms = now
         render()
 
