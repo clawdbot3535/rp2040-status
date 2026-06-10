@@ -108,6 +108,21 @@ def _read_record(path: str):
         return None
 
 
+def _bump_working(path: str, rec: dict) -> None:
+    """Setzt die Session nach einer Bestaetigung sofort auf WORKING (Felder bleiben).
+    Sonst klebt PERMISSION, bis der Agent zufaellig wieder einen Hook feuert."""
+    rec = dict(rec)
+    rec["status"] = "WORKING"
+    rec["ts"] = time.time()
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(rec, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
 def handle_incoming(line: str, key_map: dict) -> bool:
     """Verarbeitet eine Zeile vom Display. Gibt True zurueck, wenn ein Resend
     erzwungen werden soll (z.B. nach 'ready')."""
@@ -125,7 +140,11 @@ def handle_incoming(line: str, key_map: dict) -> bool:
             key, action = parts[1], parts[2]
             path = key_map.get(key)
             if path:
-                confirm_action(_read_record(path), action)
+                rec = _read_record(path)
+                if confirm_action(rec, action) and rec:
+                    # Sofortiges Feedback: PERMISSION -> WORKING + Resend erzwingen.
+                    _bump_working(path, rec)
+                    return True
     return False
 
 

@@ -71,11 +71,14 @@ def test_handle_incoming_act_calls_confirm(monkeypatch):
                         lambda rec, action: called.setdefault("args", (rec, action)) or True)
     monkeypatch.setattr(ds, "_read_record",
                         lambda path: {"source": "codex", "focus": {"backend": "tmux", "pane": "%2"}})
+    monkeypatch.setattr(ds, "_bump_working",
+                        lambda path, rec: called.__setitem__("bumped", True))
     key_map = {"abc123": "/tmp/rp2040-status/codex-x"}
     resend = ds.handle_incoming("act abc123 approve", key_map)
     assert called["args"][1] == "approve"
     assert called["args"][0]["source"] == "codex"
-    assert resend is False
+    assert called.get("bumped") is True      # PERMISSION -> WORKING nach Erfolg
+    assert resend is True                     # erzwingt sofortiges Resend (Feedback)
 
 def test_handle_incoming_act_unknown_key_noop(monkeypatch):
     flag = {"called": False}
@@ -99,3 +102,27 @@ def test_build_frame_includes_path_as_seventh_field(tmp_path):
     frame, _ = ds.build_frame(sessions)
     row = [l for l in frame.splitlines() if l.startswith("S ")][0]
     assert row[2:].split("|")[6] == "~/Projects/foo"
+
+def test_act_bumps_session_to_working(tmp_path, monkeypatch):
+    """Touch-Bestaetigung -> Session sofort PERMISSION->WORKING (Feedback), Felder erhalten."""
+    import display_service as ds, json, os
+    p = os.path.join(str(tmp_path), "claude-code-x")
+    json.dump({"status": "PERMISSION", "ts": 1, "source": "claude-code", "id": "x",
+               "project": "foo", "branch": "main", "path": "~/foo"}, open(p, "w"))
+    key = ds.derive_key(p)
+    monkeypatch.setattr(ds, "confirm_action", lambda rec, action: True)
+    resend = ds.handle_incoming("act %s approve" % key, {key: p})
+    rec = json.load(open(p))
+    assert rec["status"] == "WORKING"
+    assert rec["project"] == "foo" and rec["branch"] == "main" and rec["path"] == "~/foo"
+    assert rec["ts"] > 1
+    assert resend is True   # erzwingt sofortiges Resend ans Display
+
+def test_act_no_bump_when_confirm_fails(tmp_path, monkeypatch):
+    import display_service as ds, json, os
+    p = os.path.join(str(tmp_path), "claude-code-y")
+    json.dump({"status": "PERMISSION", "ts": 1, "source": "claude-code", "id": "y"}, open(p, "w"))
+    key = ds.derive_key(p)
+    monkeypatch.setattr(ds, "confirm_action", lambda rec, action: False)
+    ds.handle_incoming("act %s reject" % key, {key: p})
+    assert json.load(open(p))["status"] == "PERMISSION"   # unveraendert
