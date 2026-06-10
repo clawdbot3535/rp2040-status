@@ -223,10 +223,15 @@ An optional second device runs **alongside** the LED: a Waveshare
 ESP32-S3-Touch-LCD-1.69 (240×280 ST7789, CST816T touch). It shows the current
 session **colour-coded by status — the same colour language as the LED**
 (WORKING blue, INPUT yellow, PERMISSION red, DONE green, IDLE grey); the provider
-is shown by a small logo in the header pill. A tap brings the matching terminal to
-the front; swipe pages through sessions (dots show the position). The LED path
-(`broker.py`) is untouched — both devices are driven in parallel from the same
-status files.
+is shown by a small logo in the header pill, and the real working path
+(`$HOME`→`~`) sits below it. A tap brings the matching terminal to the front;
+swipe pages through sessions (dots show the position). The LED path (`broker.py`)
+is untouched — both devices are driven in parallel from the same status files.
+
+The screen is animated: the WORKING icon spins, the idle burst rotates,
+INPUT/PERMISSION breathe (backlight PWM), DONE pops once on transition, and a path
+that's too long to fit scrolls as a flicker-free marquee (rendered to an off-screen
+buffer and blitted in one pass). Icons are anti-aliased (8-bit alpha, bilinear).
 
 ```
 send.py ──► /tmp/rp2040-status/<source>-<session>
