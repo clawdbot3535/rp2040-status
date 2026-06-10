@@ -1,0 +1,20 @@
+{
+  "name": "rp2040-status",
+  "interface": {
+    "displayName": "rp2040-status"
+  },
+  "plugins": [
+    {
+      "name": "rp2040-display",
+      "source": {
+        "source": "local",
+        "path": "./plugins/rp2040-display"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

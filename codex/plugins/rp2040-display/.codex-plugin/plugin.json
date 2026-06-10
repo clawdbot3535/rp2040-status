@@ -1,0 +1,15 @@
+{
+  "name": "rp2040-display",
+  "version": "1.0.0",
+  "description": "Spiegelt Codex-Session-Status (working/permission/done) auf das rp2040-status Touch-Display via send.py.",
+  "author": {
+    "name": "christian"
+  },
+  "hooks": "./.codex-plugin/hooks.json",
+  "interface": {
+    "displayName": "rp2040-display",
+    "shortDescription": "Codex-Status auf dem rp2040 Touch-Display",
+    "developerName": "christian",
+    "category": "Productivity"
+  }
+}
