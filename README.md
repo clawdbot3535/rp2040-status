@@ -166,42 +166,35 @@ A complete wiring in `~/.claude/settings.json` looks like this:
 
 #### Codex CLI
 
-Codex has a Claude-Code-style hook system: drop a `hooks.json` into
-`~/.codex/` with the events you want to react to. The `session_id` arrives
-on stdin in the JSON payload (same shape as Claude Code, plus a `turn_id`
-field that lets `send.py` auto-detect the source).
+> **Codex does _not_ read a freestanding `~/.codex/hooks.json`** (that's a
+> Claude-Code-only pattern). Codex loads hooks **only** from marketplace
+> plugins that are enabled and trusted in `~/.codex/config.toml`. This repo
+> ships such a plugin under [`codex/`](codex/) — see
+> [`codex/README.md`](codex/README.md) for details.
 
-```json
-{
-  "UserPromptSubmit": [
-    { "matcher": null, "hooks": [
-      { "type": "command",
-        "command": "python3 /path/to/send.py WORKING --source codex",
-        "timeout": 5, "async": true }
-    ] }
-  ],
-  "PermissionRequest": [
-    { "matcher": null, "hooks": [
-      { "type": "command",
-        "command": "python3 /path/to/send.py PERMISSION --source codex",
-        "timeout": 5, "async": true }
-    ] }
-  ],
-  "Stop": [
-    { "matcher": null, "hooks": [
-      { "type": "command",
-        "command": "python3 /path/to/send.py DONE --source codex",
-        "timeout": 5, "async": true }
-    ] }
-  ]
-}
+Install the local plugin:
+
+```bash
+codex plugin marketplace add /path/to/rp2040-status/codex
+codex plugin add rp2040-display@rp2040-status
 ```
+
+It maps `UserPromptSubmit`/`PreToolUse`/`PostToolUse` → `WORKING`,
+`PermissionRequest` → `PERMISSION`, `Stop` → `DONE`, all via
+`send.py --source codex`. The `session_id` arrives on stdin (same shape as
+Claude Code, plus a `turn_id` that lets `send.py` auto-detect the source).
 
 > **One-time trust step:** Codex requires you to approve unfamiliar hooks
 > on first use. Start `codex` interactively once — the startup review
-> dialog will surface the new hooks; pick **Trust all and continue**.
-> After that, both `codex` and `codex exec` will fire the hooks. If you
-> later edit `hooks.json`, re-trust the same way.
+> dialog surfaces the new hooks; pick **Trust all and continue**. After
+> that, both `codex` and `codex exec` fire the hooks.
+
+> **Editing hooks needs a re-install.** Codex installs the plugin as a
+> _copy_ under `~/.codex/plugins/cache/`. After changing `hooks.json`,
+> bump the version in both manifests and run
+> `codex plugin remove rp2040-display@rp2040-status`,
+> `codex plugin marketplace upgrade`,
+> `codex plugin add rp2040-display@rp2040-status` — then re-trust.
 
 #### Antigravity
 
