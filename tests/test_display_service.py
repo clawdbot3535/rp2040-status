@@ -11,22 +11,52 @@ def test_derive_key_stable_and_short():
     k2 = ds.derive_key("/tmp/rp2040-status/claude-code-abc")
     assert k1 == k2 and len(k1) == 6
 
-def test_build_frame_lists_sessions_newest_first(tmp_path):
-    _write(str(tmp_path), "claude-code-a", status="WORKING", ts=100,
+def test_build_frame_orders_by_created_oldest_first(tmp_path):
+    # Aeltere Session (created=10) zuerst, neue haengt hinten an — unabhaengig vom ts.
+    _write(str(tmp_path), "claude-code-a", status="WORKING", ts=999, created=10,
            source="claude-code", id="a", project="proj", branch="main", title="")
-    _write(str(tmp_path), "codex-b", status="DONE", ts=200,
+    _write(str(tmp_path), "codex-b", status="DONE", ts=100, created=20,
            source="codex", id="b", project="buddy", branch="dev", title="t")
-    sessions = ds.read_sessions(str(tmp_path), stale_seconds=None, now=300)
+    sessions = ds.read_sessions(str(tmp_path), stale_seconds=None, now=2000)
     frame, key_map = ds.build_frame(sessions)
     lines = frame.splitlines()
     assert lines[0] == "LIST 2"
     assert lines[-1] == "END"
-    assert lines[1].startswith("S ") and "|DONE|codex|buddy|dev|t" in lines[1]
-    assert "|WORKING|claude-code|proj|main|" in lines[2]
+    # created=10 (claude-a) vor created=20 (codex-b), obwohl claude-a den neueren ts hat.
+    assert "|WORKING|claude-code|proj|main|" in lines[1]
+    assert "|DONE|codex|buddy|dev|t" in lines[2]
     assert set(key_map.values()) == {
         os.path.join(str(tmp_path), "codex-b"),
         os.path.join(str(tmp_path), "claude-code-a"),
     }
+
+def test_build_frame_order_stable_when_ts_changes(tmp_path):
+    # Regression: ein Event (neuer ts) auf einer Session darf die Reihenfolge NICHT aendern.
+    _write(str(tmp_path), "claude-code-a", status="WORKING", ts=100, created=10,
+           source="claude-code", id="a", project="p", branch="", title="")
+    _write(str(tmp_path), "codex-b", status="WORKING", ts=101, created=20,
+           source="codex", id="b", project="p", branch="", title="")
+    order_before = [l.split("|")[2] for l in
+                    ds.build_frame(ds.read_sessions(str(tmp_path), None, 200))[0].splitlines()
+                    if l.startswith("S ")]
+    # codex-b feuert ein Event -> ts springt nach vorn (volatile), created bleibt.
+    _write(str(tmp_path), "codex-b", status="WORKING", ts=999, created=20,
+           source="codex", id="b", project="p", branch="", title="")
+    order_after = [l.split("|")[2] for l in
+                   ds.build_frame(ds.read_sessions(str(tmp_path), None, 1000))[0].splitlines()
+                   if l.startswith("S ")]
+    assert order_before == order_after == ["claude-code", "codex"]
+
+def test_build_frame_created_fallback_to_ts(tmp_path):
+    # Alte Dateien ohne created-Feld fallen sauber auf ts zurueck (Uebergang).
+    _write(str(tmp_path), "claude-code-a", status="WORKING", ts=10,
+           source="claude-code", id="a", project="p", branch="", title="")
+    _write(str(tmp_path), "codex-b", status="WORKING", ts=20,
+           source="codex", id="b", project="p", branch="", title="")
+    order = [l.split("|")[2] for l in
+             ds.build_frame(ds.read_sessions(str(tmp_path), None, 100))[0].splitlines()
+             if l.startswith("S ")]
+    assert order == ["claude-code", "codex"]
 
 def test_build_frame_sanitizes_pipe_and_newline(tmp_path):
     _write(str(tmp_path), "codex-x", status="WORKING", ts=1, source="codex",

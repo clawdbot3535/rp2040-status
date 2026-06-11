@@ -53,8 +53,17 @@ def read_sessions(status_dir: str, stale_seconds: Optional[float], now: float) -
 
 
 def build_frame(sessions: List[Tuple[str, dict]]) -> Tuple[str, dict]:
-    """Baut den LIST-Frame-String + key->path-Map. Neueste Session zuerst."""
-    sessions = sorted(sessions, key=lambda pr: pr[1].get("ts", 0), reverse=True)
+    """Baut den LIST-Frame-String + key->path-Map.
+
+    Stabile Reihenfolge nach Erst-Zeitpunkt (``created``, Fallback ``ts``),
+    aelteste zuerst — neue Sessions haengen hinten an. Bewusst NICHT nach dem
+    volatilen ``ts`` sortiert: sonst springt die Liste bei jedem Event um und
+    die am Display angewaehlte Session wechselt unterm Finger die Position.
+    """
+    sessions = sorted(
+        sessions,
+        key=lambda pr: pr[1].get("created", pr[1].get("ts", 0)),
+    )
     lines = [f"LIST {len(sessions)}"]
     key_map = {}
     for path, rec in sessions:

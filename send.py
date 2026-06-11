@@ -229,6 +229,9 @@ def write_status(session_id: str, status: str, source: str,
     record = {
         "status": status,
         "ts": time.time(),
+        # Unveraenderlicher Erst-Zeitpunkt: stabile Display-Reihenfolge, kein
+        # Reshuffle bei jedem Event. Wird ueber Updates hinweg bewahrt.
+        "created": old.get("created") or time.time(),
         "source": source or old.get("source", "") or "unknown",
         "id": session_id,
         "project": pick(project, "project"),

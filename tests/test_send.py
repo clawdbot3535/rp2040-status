@@ -86,3 +86,17 @@ def test_write_status_stores_and_preserves_path(tmp_path, monkeypatch):
     with open(os.path.join(str(tmp_path), "claude-code-abc")) as f:
         rec = json.load(f)
     assert rec["path"] == "~/Projects/foo"
+
+def test_write_status_stamps_and_preserves_created(tmp_path, monkeypatch):
+    # created wird beim ersten Write gesetzt und bei spaeteren Updates bewahrt —
+    # damit die Display-Reihenfolge stabil bleibt (kein Reshuffle bei Aktivitaet).
+    import send; monkeypatch.setattr(send, "STATUS_DIR", str(tmp_path))
+    send.write_status("abc", "WORKING", "claude-code", project="foo")
+    with open(os.path.join(str(tmp_path), "claude-code-abc")) as f:
+        first = json.load(f)
+    assert "created" in first and isinstance(first["created"], (int, float))
+    send.write_status("abc", "DONE", "claude-code")
+    with open(os.path.join(str(tmp_path), "claude-code-abc")) as f:
+        second = json.load(f)
+    assert second["created"] == first["created"]      # unveraendert
+    assert second["ts"] >= first["ts"]                # ts darf sich aendern
