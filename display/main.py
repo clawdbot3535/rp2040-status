@@ -7,6 +7,7 @@ import round24 as fbig          # proportionaler grosser Font (Arial Rounded Bol
 import round15 as fsm           # proportionaler kleiner Font
 from cst816 import CST816
 from provider_logos import OPENAI, CLAUDE, CLAUDE_DETAIL, PI
+from sel import resolve_page
 import icons
 
 LH = fsm.HEIGHT
@@ -87,6 +88,8 @@ _path_over = False
 # --- Modell ---
 sessions = []   # Liste dicts: {key,status,source,project,branch,title}
 page = 0
+sel_key = None  # per Wisch angewaehlter Session-Key; haelt die Auswahl ueber
+                # Reorder/Add/Remove hinweg stabil (None = Positions-Default)
 
 poll = select.poll()
 poll.register(sys.stdin, select.POLLIN)
@@ -102,14 +105,18 @@ def read_serial_lines():
         handle_line(line.strip())
 
 def handle_line(line):
-    global _pending, sessions, page
+    global _pending, sessions, page, sel_key
     if line.startswith("LIST"):
         _pending = []
     elif line == "END":
         if _pending is not None:
             sessions = _pending
             _pending = None
-            page = min(page, max(0, len(sessions) - 1))
+            keys = [s["key"] for s in sessions]
+            page = resolve_page(keys, sel_key, page)
+            # Auswahl verloren (Session beendet) -> zurueck auf Positions-Default.
+            if sel_key is not None and sel_key not in keys:
+                sel_key = None
             render()
     elif line.startswith("S ") and _pending is not None:
         parts = line[2:].split("|")
@@ -563,10 +570,11 @@ _last_xy = None
 _last_action_ms = -1000
 
 def _nav(delta, now):
-    global page, _last_action_ms, _marquee_off
+    global page, _last_action_ms, _marquee_off, sel_key
     np = page + delta
     if 0 <= np < len(sessions):
         page = np
+        sel_key = sessions[page]["key"]   # Auswahl an Identitaet binden
         _marquee_off = 0
         _last_action_ms = now
         render()
